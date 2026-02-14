@@ -252,17 +252,13 @@ pub fn cleanup_old_logs(max_age_days: u64) -> Result<usize, Box<dyn std::error::
         let entry = entry?;
         let path = entry.path();
 
-        if path.extension().map(|ext| ext == "log").unwrap_or(false) {
-            if let Ok(metadata) = entry.metadata() {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(age) = now.duration_since(modified) {
-                        if age > max_age && std::fs::remove_file(&path).is_ok() {
+        if path.extension().map(|ext| ext == "log").unwrap_or(false)
+            && let Ok(metadata) = entry.metadata()
+                && let Ok(modified) = metadata.modified()
+                    && let Ok(age) = now.duration_since(modified)
+                        && age > max_age && std::fs::remove_file(&path).is_ok() {
                             removed += 1;
                         }
-                    }
-                }
-            }
-        }
     }
 
     Ok(removed)

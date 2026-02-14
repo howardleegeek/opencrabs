@@ -300,12 +300,11 @@ impl Config {
         let mut config = Self::default();
 
         // 1. Try to load system config
-        if let Some(system_config_path) = Self::system_config_path() {
-            if system_config_path.exists() {
+        if let Some(system_config_path) = Self::system_config_path()
+            && system_config_path.exists() {
                 tracing::debug!("Loading system config from: {:?}", system_config_path);
                 config = Self::merge_from_file(config, &system_config_path)?;
             }
-        }
 
         // 2. Try to load local config
         let local_config_path = Self::local_config_path();
@@ -563,13 +562,13 @@ impl Config {
     /// Check if any provider has an API key configured (from env, keyring, or config).
     pub fn has_any_api_key(&self) -> bool {
         let has_anthropic = self.providers.anthropic.as_ref()
-            .map_or(false, |p| p.api_key.is_some());
+            .is_some_and(|p| p.api_key.is_some());
         let has_openai = self.providers.openai.as_ref()
-            .map_or(false, |p| p.api_key.is_some());
+            .is_some_and(|p| p.api_key.is_some());
         let has_gemini = self.providers.gemini.as_ref()
-            .map_or(false, |p| p.api_key.is_some());
+            .is_some_and(|p| p.api_key.is_some());
         let has_qwen = self.providers.qwen.as_ref()
-            .map_or(false, |p| p.api_key.is_some());
+            .is_some_and(|p| p.api_key.is_some());
 
         has_anthropic || has_openai || has_gemini || has_qwen
     }
@@ -578,14 +577,13 @@ impl Config {
         tracing::debug!("Validating configuration...");
 
         // Validate database path parent directory exists
-        if let Some(parent) = self.database.path.parent() {
-            if !parent.exists() {
+        if let Some(parent) = self.database.path.parent()
+            && !parent.exists() {
                 tracing::warn!(
                     "Database parent directory does not exist, will be created: {:?}",
                     parent
                 );
             }
-        }
 
         // Validate log level
         let valid_levels = ["trace", "debug", "info", "warn", "error"];

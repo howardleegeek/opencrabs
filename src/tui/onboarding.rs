@@ -271,6 +271,12 @@ pub struct OnboardingWizard {
     pub error_message: Option<String>,
 }
 
+impl Default for OnboardingWizard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OnboardingWizard {
     /// Create a new wizard with default state
     pub fn new() -> Self {
@@ -351,13 +357,12 @@ impl OnboardingWizard {
             return;
         }
         // Try keyring first
-        if !provider.keyring_key.is_empty() {
-            if SecretString::from_keyring_optional(provider.keyring_key).is_some() {
+        if !provider.keyring_key.is_empty()
+            && SecretString::from_keyring_optional(provider.keyring_key).is_some() {
                 self.api_key_input = EXISTING_KEY_SENTINEL.to_string();
                 self.api_key_cursor = 0;
                 return;
             }
-        }
         // Then try each env var
         for env_var in provider.env_vars {
             if SecretString::from_env_optional(env_var).is_some() {
@@ -463,11 +468,7 @@ impl OnboardingWizard {
                 }
             }
             OnboardingStep::BrainSetup => {
-                if self.mode == WizardMode::QuickStart {
-                    self.step = OnboardingStep::HealthCheck;
-                } else {
-                    self.step = OnboardingStep::HealthCheck;
-                }
+                self.step = OnboardingStep::HealthCheck;
                 self.brain_generating = false;
                 self.brain_error = None;
             }
@@ -521,20 +522,14 @@ impl OnboardingWizard {
 
         // Check 3: Workspace directory
         let workspace = PathBuf::from(&self.workspace_path);
-        self.health_results[2].1 = if workspace.exists() {
-            HealthStatus::Pass
-        } else if std::fs::create_dir_all(&workspace).is_ok() {
+        self.health_results[2].1 = if workspace.exists() || std::fs::create_dir_all(&workspace).is_ok() {
             HealthStatus::Pass
         } else {
             HealthStatus::Fail(format!("Cannot create {}", workspace.display()))
         };
 
-        // Check 4: Template files available (they're compiled in)
-        self.health_results[3].1 = if TEMPLATE_FILES.is_empty() {
-            HealthStatus::Fail("No template files found".to_string())
-        } else {
-            HealthStatus::Pass
-        };
+        // Check 4: Template files available (they're compiled in, always present)
+        self.health_results[3].1 = HealthStatus::Pass;
 
         self.health_running = false;
         self.health_complete = true;
@@ -1148,27 +1143,27 @@ Respond with EXACTLY six sections using these delimiters. No extra text before t
         // Channels config
         config.channels = ChannelsConfig {
             telegram: ChannelConfig {
-                enabled: self.channel_toggles.get(0).map_or(false, |t| t.1),
+                enabled: self.channel_toggles.first().is_some_and(|t| t.1),
                 token: None,
             },
             discord: ChannelConfig {
-                enabled: self.channel_toggles.get(1).map_or(false, |t| t.1),
+                enabled: self.channel_toggles.get(1).is_some_and(|t| t.1),
                 token: None,
             },
             whatsapp: ChannelConfig {
-                enabled: self.channel_toggles.get(2).map_or(false, |t| t.1),
+                enabled: self.channel_toggles.get(2).is_some_and(|t| t.1),
                 token: None,
             },
             signal: ChannelConfig {
-                enabled: self.channel_toggles.get(3).map_or(false, |t| t.1),
+                enabled: self.channel_toggles.get(3).is_some_and(|t| t.1),
                 token: None,
             },
             google_chat: ChannelConfig {
-                enabled: self.channel_toggles.get(4).map_or(false, |t| t.1),
+                enabled: self.channel_toggles.get(4).is_some_and(|t| t.1),
                 token: None,
             },
             imessage: ChannelConfig {
-                enabled: self.channel_toggles.get(5).map_or(false, |t| t.1),
+                enabled: self.channel_toggles.get(5).is_some_and(|t| t.1),
                 token: None,
             },
         };
@@ -1220,12 +1215,11 @@ Respond with EXACTLY six sections using these delimiters. No extra text before t
         }
 
         // Install daemon if requested
-        if self.install_daemon {
-            if let Err(e) = install_daemon_service() {
+        if self.install_daemon
+            && let Err(e) = install_daemon_service() {
                 tracing::warn!("Failed to install daemon: {}", e);
                 // Non-fatal — don't block onboarding completion
             }
-        }
 
         Ok(())
     }

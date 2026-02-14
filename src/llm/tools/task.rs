@@ -103,8 +103,8 @@ impl FileLock {
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     if attempt >= max_attempts {
                         // Check if lock is stale (older than 60 seconds)
-                        if let Ok(metadata) = fs::metadata(&lock_path).await {
-                            if let Ok(modified) = metadata.modified() {
+                        if let Ok(metadata) = fs::metadata(&lock_path).await
+                            && let Ok(modified) = metadata.modified() {
                                 let age = std::time::SystemTime::now()
                                     .duration_since(modified)
                                     .unwrap_or_default();
@@ -115,7 +115,6 @@ impl FileLock {
                                     continue;
                                 }
                             }
-                        }
 
                         return Err(ToolError::Execution(format!(
                             "Failed to acquire lock after {} attempts. \
@@ -402,20 +401,16 @@ impl Tool for TaskTool {
                         if !show_completed && t.status == TaskStatus::Completed {
                             return false;
                         }
-                        if let Some(ref s) = status {
-                            if let Ok(target_status) = parse_status(s) {
-                                if t.status != target_status {
+                        if let Some(ref s) = status
+                            && let Ok(target_status) = parse_status(s)
+                                && t.status != target_status {
                                     return false;
                                 }
-                            }
-                        }
-                        if let Some(ref p) = priority {
-                            if let Ok(target_priority) = parse_priority(p) {
-                                if t.priority != target_priority {
+                        if let Some(ref p) = priority
+                            && let Ok(target_priority) = parse_priority(p)
+                                && t.priority != target_priority {
                                     return false;
                                 }
-                            }
-                        }
                         true
                     })
                     .collect();
@@ -600,14 +595,13 @@ impl Tool for TaskTool {
                                 .dependencies
                                 .clone();
                             for dep_id in &task_deps {
-                                if let Some(dep_task) = store.tasks.get(dep_id) {
-                                    if dep_task.status != TaskStatus::Completed {
+                                if let Some(dep_task) = store.tasks.get(dep_id)
+                                    && dep_task.status != TaskStatus::Completed {
                                         return Err(ToolError::InvalidInput(format!(
                                             "Cannot update task: dependency {} is not completed",
                                             dep_id
                                         )));
                                     }
-                                }
                             }
                         }
                     }

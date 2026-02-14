@@ -164,7 +164,7 @@ impl QwenProvider {
 
         headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            "application/json".parse().expect("valid content-type"),
         );
 
         headers
@@ -206,8 +206,8 @@ impl QwenProvider {
                 let trimmed = tool_call_content.trim();
 
                 // Parse the JSON inside
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if let (Some(name), Some(arguments)) = (
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed)
+                    && let (Some(name), Some(arguments)) = (
                         parsed.get("name").and_then(|v| v.as_str()),
                         parsed.get("arguments"),
                     ) {
@@ -217,7 +217,6 @@ impl QwenProvider {
                         );
                         tool_calls.push((id, name.to_string(), arguments.clone()));
                     }
-                }
 
                 remaining = &remaining[start + end + 12..];
             } else {
@@ -235,15 +234,14 @@ impl QwenProvider {
         }
 
         // Look for <think> ... </think> blocks
-        if let Some(start) = text.find("<think>") {
-            if let Some(end) = text.find("</think>") {
+        if let Some(start) = text.find("<think>")
+            && let Some(end) = text.find("</think>") {
                 let thinking = text[start + 7..end].trim().to_string();
                 let before = &text[..start];
                 let after = &text[end + 8..];
                 let remaining = format!("{}{}", before.trim(), after.trim());
                 return (Some(thinking), remaining);
             }
-        }
 
         (None, text.to_string())
     }
@@ -362,7 +360,7 @@ impl QwenProvider {
                 let partial: String = marker_chars[..i].iter().collect();
                 if result.ends_with(&partial) {
                     let new_len = result.len() - partial.len();
-                    result = result[..new_len].to_string();
+                    result.truncate(new_len);
                     break;
                 }
             }
@@ -384,8 +382,8 @@ impl QwenProvider {
         // Add tool instructions to system prompt based on parser type
         match self.tool_parser {
             ToolCallParser::Hermes => {
-                if let Some(tools) = &request.tools {
-                    if !tools.is_empty() {
+                if let Some(tools) = &request.tools
+                    && !tools.is_empty() {
                         let hermes_tools = self.format_hermes_tools(tools);
                         if system_content.is_empty() {
                             system_content = hermes_tools;
@@ -393,11 +391,10 @@ impl QwenProvider {
                             system_content = format!("{}\n\n{}", hermes_tools, system_content);
                         }
                     }
-                }
             }
             ToolCallParser::NativeQwen => {
-                if let Some(tools) = &request.tools {
-                    if !tools.is_empty() {
+                if let Some(tools) = &request.tools
+                    && !tools.is_empty() {
                         let native_tools = self.format_native_qwen_tools(tools);
                         if system_content.is_empty() {
                             system_content = native_tools;
@@ -405,7 +402,6 @@ impl QwenProvider {
                             system_content = format!("{}\n\n{}", native_tools, system_content);
                         }
                     }
-                }
             }
             ToolCallParser::OpenAI => {
                 // OpenAI format uses the tools field in the request, not system prompt
@@ -642,8 +638,8 @@ impl QwenProvider {
         let mut has_tool_calls = false;
 
         // Process content text
-        if let Some(content) = choice.message.content {
-            if !content.is_empty() {
+        if let Some(content) = choice.message.content
+            && !content.is_empty() {
                 // Extract thinking if enabled
                 let (thinking, remaining) = self.extract_thinking(&content);
 
@@ -747,11 +743,10 @@ impl QwenProvider {
                     }
                 }
             }
-        }
 
         // Convert OpenAI-style tool_calls to ToolUse content blocks
-        if let Some(tool_calls) = choice.message.tool_calls {
-            if !tool_calls.is_empty() {
+        if let Some(tool_calls) = choice.message.tool_calls
+            && !tool_calls.is_empty() {
                 has_tool_calls = true;
                 tracing::debug!(
                     "Converting {} tool calls from Qwen response",
@@ -781,7 +776,6 @@ impl QwenProvider {
                     });
                 }
             }
-        }
 
         // Map finish_reason to StopReason
         let stop_reason = if has_tool_calls {
@@ -957,11 +951,11 @@ impl Provider for QwenProvider {
                                 return StreamEvent::MessageStop;
                             }
 
-                            if let Ok(chunk) = serde_json::from_str::<QwenStreamChunk>(json_str) {
-                                if let Some(choice) = chunk.choices.first() {
-                                    if let Some(ref delta) = choice.delta {
-                                        if let Some(ref content) = delta.content {
-                                            if !content.is_empty() {
+                            if let Ok(chunk) = serde_json::from_str::<QwenStreamChunk>(json_str)
+                                && let Some(choice) = chunk.choices.first()
+                                    && let Some(ref delta) = choice.delta
+                                        && let Some(ref content) = delta.content
+                                            && !content.is_empty() {
                                                 return StreamEvent::ContentBlockDelta {
                                                     index: 0,
                                                     delta: ContentDelta::TextDelta {
@@ -969,10 +963,6 @@ impl Provider for QwenProvider {
                                                     },
                                                 };
                                             }
-                                        }
-                                    }
-                                }
-                            }
                         }
                     }
 

@@ -154,7 +154,6 @@ name = "database"
 harness = false
 path = "src/benches/database.rs"
 
-# [[bench]]
-# name = "llm_processing"
-# harness = false
-# path = "src/benches/llm_processing.rs"
+[lints.clippy]
+panic = "deny"
+unwrap_used = "deny"

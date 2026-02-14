@@ -165,7 +165,7 @@ impl Tool for DocParserTool {
             if text.len() > max_chars {
                 format!(
                     "{}...\n\n[Truncated: {} of {} characters shown]",
-                    &text[..max_chars],
+                    crate::utils::truncate_str(&text, max_chars),
                     max_chars,
                     text.len()
                 )
@@ -333,11 +333,10 @@ impl DocParserTool {
                     }
                 }
                 Ok(quick_xml::events::Event::Text(e)) => {
-                    if in_text {
-                        if let Ok(t) = e.unescape() {
+                    if in_text
+                        && let Ok(t) = e.unescape() {
                             text.push_str(&t);
                         }
-                    }
                 }
                 Ok(quick_xml::events::Event::End(ref e)) => {
                     if e.name().as_ref() == b"w:t" {
@@ -469,7 +468,7 @@ impl DocParserTool {
         if let Some(start) = lowercase.find("<title>") {
             let start = start + 7;
             if let Some(end) = lowercase[start..].find("</title>") {
-                return Some(html[start..start + end].trim().to_string());
+                return html.get(start..start + end).map(|s| s.trim().to_string());
             }
         }
         None

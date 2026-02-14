@@ -125,26 +125,23 @@ impl Tool for GlobTool {
             match entry {
                 Ok(path) => {
                     // Filter hidden files if not requested
-                    if !input.include_hidden {
-                        if let Some(file_name) = path.file_name() {
-                            if file_name
+                    if !input.include_hidden
+                        && let Some(file_name) = path.file_name()
+                            && file_name
                                 .to_str()
                                 .map(|s| s.starts_with('.'))
                                 .unwrap_or(false)
                             {
                                 continue;
                             }
-                        }
-                    }
 
                     matches.push(path);
 
                     // Apply limit
-                    if let Some(limit) = input.limit {
-                        if matches.len() >= limit {
+                    if let Some(limit) = input.limit
+                        && matches.len() >= limit {
                             break;
                         }
-                    }
                 }
                 Err(e) => {
                     tracing::warn!("Error reading glob entry: {}", e);
@@ -179,11 +176,10 @@ impl Tool for GlobTool {
             output.push_str(&format!("  {}\n", display_path));
         }
 
-        if let Some(limit) = input.limit {
-            if matches.len() >= limit {
+        if let Some(limit) = input.limit
+            && matches.len() >= limit {
                 output.push_str(&format!("\n(Limited to {} results)", limit));
             }
-        }
 
         Ok(ToolResult::success(output))
     }

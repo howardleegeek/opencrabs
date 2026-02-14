@@ -17,13 +17,11 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize logging: {}", e))?;
 
     // Clean up old log files (keep last 7 days)
-    if cli_args.debug {
-        if let Ok(removed) = logging::cleanup_old_logs(7) {
-            if removed > 0 {
+    if cli_args.debug
+        && let Ok(removed) = logging::cleanup_old_logs(7)
+            && removed > 0 {
                 tracing::info!("🧹 Cleaned up {} old log file(s)", removed);
             }
-        }
-    }
 
     // Run CLI application
     cli::run().await

@@ -181,8 +181,8 @@ impl EventHandler {
         tokio::spawn(async move {
             loop {
                 // Poll for crossterm events with timeout
-                if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false) {
-                    if let Ok(event) = crossterm::event::read() {
+                if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false)
+                    && let Ok(event) = crossterm::event::read() {
                         match event {
                             crossterm::event::Event::Key(key) => {
                                 // Only process key press events to avoid duplicates
@@ -231,7 +231,6 @@ impl EventHandler {
                             }
                         }
                     }
-                }
 
                 // Send tick event for animations
                 if tx.send(TuiEvent::Tick).is_err() {

@@ -702,22 +702,26 @@ fn render_brain_setup(lines: &mut Vec<Line<'static>>, wizard: &OnboardingWizard)
     )));
 }
 
-/// Wrap a string into chunks of max_width characters
+/// Wrap a string into chunks of max_width display columns
 fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    if text.len() <= max_width {
+    use unicode_width::UnicodeWidthStr;
+    if text.width() <= max_width {
         return vec![text.to_string()];
     }
     let mut result = Vec::new();
     let mut remaining = text;
     while !remaining.is_empty() {
-        if remaining.len() <= max_width {
+        if remaining.width() <= max_width {
             result.push(remaining.to_string());
             break;
         }
+        // Find byte index at display width limit
+        let byte_limit = super::render::char_boundary_at_width(remaining, max_width);
         // Try to break at a space
-        let break_at = remaining[..max_width]
+        let break_at = remaining[..byte_limit]
             .rfind(' ')
-            .unwrap_or(max_width);
+            .unwrap_or(byte_limit);
+        let break_at = if break_at == 0 { byte_limit.max(remaining.ceil_char_boundary(1)) } else { break_at };
         result.push(remaining[..break_at].to_string());
         remaining = remaining[break_at..].trim_start();
     }

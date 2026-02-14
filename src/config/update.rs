@@ -135,12 +135,11 @@ impl ProviderUpdater {
         });
 
         // Update base URL if provider specifies one
-        if let Some(api_endpoint) = &provider.api_endpoint {
-            if new_config.base_url.as_ref() != Some(api_endpoint) {
+        if let Some(api_endpoint) = &provider.api_endpoint
+            && new_config.base_url.as_ref() != Some(api_endpoint) {
                 new_config.base_url = Some(api_endpoint.clone());
                 updated = true;
             }
-        }
 
         // Update default model if not set and provider has models
         if new_config.default_model.is_none() && !provider.models.is_empty() {

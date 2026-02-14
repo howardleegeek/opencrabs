@@ -229,15 +229,12 @@ fn parse_retry_seconds(msg: &str) -> Option<u64> {
     ];
 
     for pattern in patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            if let Some(captures) = re.captures(msg) {
-                if let Some(num_str) = captures.get(1) {
-                    if let Ok(secs) = num_str.as_str().parse::<u64>() {
+        if let Ok(re) = Regex::new(pattern)
+            && let Some(captures) = re.captures(msg)
+                && let Some(num_str) = captures.get(1)
+                    && let Ok(secs) = num_str.as_str().parse::<u64>() {
                         return Some(secs);
                     }
-                }
-            }
-        }
     }
 
     None

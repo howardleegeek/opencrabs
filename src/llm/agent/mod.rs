@@ -11,6 +11,6 @@ pub mod service;
 pub use context::AgentContext;
 pub use error::{AgentError, Result};
 pub use service::{
-    AgentResponse, AgentService, AgentStreamResponse, ApprovalCallback, ProgressCallback,
-    ProgressEvent, ToolApprovalInfo,
+    AgentResponse, AgentService, AgentStreamResponse, ApprovalCallback, MessageQueueCallback,
+    ProgressCallback, ProgressEvent, ToolApprovalInfo,
 };

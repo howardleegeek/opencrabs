@@ -47,6 +47,12 @@ pub enum ProgressEvent {
 /// Callback for reporting progress during agent execution
 pub type ProgressCallback = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
 
+/// Callback for checking if a user message has been queued during tool execution.
+/// Returns Some(message) if a message is waiting, None otherwise. Must not block.
+pub type MessageQueueCallback = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send + Sync,
+>;
+
 /// Agent Service for managing AI conversations
 pub struct AgentService {
     /// LLM provider
@@ -73,6 +79,9 @@ pub struct AgentService {
     /// Callback for reporting progress during tool execution
     progress_callback: Option<ProgressCallback>,
 
+    /// Callback for checking queued user messages between tool iterations
+    message_queue_callback: Option<MessageQueueCallback>,
+
     /// Working directory for tool execution
     working_directory: std::path::PathBuf,
 }
@@ -89,6 +98,7 @@ impl AgentService {
             auto_approve_tools: false,
             approval_callback: None,
             progress_callback: None,
+            message_queue_callback: None,
             working_directory: std::env::current_dir().unwrap_or_default(),
         }
     }
@@ -126,6 +136,12 @@ impl AgentService {
     /// Set the progress callback for reporting tool execution progress
     pub fn with_progress_callback(mut self, callback: Option<ProgressCallback>) -> Self {
         self.progress_callback = callback;
+        self
+    }
+
+    /// Set the message queue callback for injecting user messages between tool iterations
+    pub fn with_message_queue_callback(mut self, callback: Option<MessageQueueCallback>) -> Self {
+        self.message_queue_callback = callback;
         self
     }
 
@@ -329,11 +345,10 @@ impl AgentService {
 
         while iteration < self.max_tool_iterations {
             // Check for cancellation
-            if let Some(ref token) = cancel_token {
-                if token.is_cancelled() {
+            if let Some(ref token) = cancel_token
+                && token.is_cancelled() {
                     break;
                 }
-            }
 
             iteration += 1;
 
@@ -570,11 +585,10 @@ impl AgentService {
 
             for (tool_id, tool_name, tool_input) in tool_uses {
                 // Check for cancellation before each tool
-                if let Some(ref token) = cancel_token {
-                    if token.is_cancelled() {
+                if let Some(ref token) = cancel_token
+                    && token.is_cancelled() {
                         break;
                     }
-                }
 
                 tracing::info!(
                     "Executing tool '{}' (iteration {}/{})",
@@ -788,6 +802,20 @@ impl AgentService {
                 content: tool_results,
             };
             context.add_message(tool_result_msg);
+
+            // Check for queued user messages to inject between tool iterations.
+            // This lets the user provide follow-up feedback mid-execution (like Claude Code).
+            if let Some(ref queue_cb) = self.message_queue_callback
+                && let Some(queued_msg) = queue_cb().await {
+                    tracing::info!("Injecting queued user message between tool iterations");
+                    let injected = Message::user(queued_msg.clone());
+                    context.add_message(injected);
+
+                    // Save to database so conversation history stays consistent
+                    let _ = message_service
+                        .create_message(session_id, "user".to_string(), queued_msg)
+                        .await;
+                }
 
             // Check if we've hit max iterations
             if iteration >= self.max_tool_iterations {
@@ -1235,5 +1263,128 @@ mod tests {
         // Should have tokens from both calls
         assert!(response.usage.input_tokens >= 25); // 10 + 15
         assert!(response.usage.output_tokens >= 45); // 20 + 25
+    }
+
+    #[tokio::test]
+    async fn test_message_queue_injection_between_tool_calls() {
+        let db = Database::connect_in_memory().await.unwrap();
+        db.run_migrations().await.unwrap();
+        let pool = db.pool().clone();
+
+        let context = ServiceContext::new(pool);
+        let provider = Arc::new(MockProviderWithTools::new());
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(MockTool));
+
+        // Set up a message queue with a queued message
+        let queue: Arc<tokio::sync::Mutex<Option<String>>> =
+            Arc::new(tokio::sync::Mutex::new(Some("user follow-up".to_string())));
+
+        let queue_clone = queue.clone();
+        let message_queue_callback: MessageQueueCallback = Arc::new(move || {
+            let q = queue_clone.clone();
+            Box::pin(async move { q.lock().await.take() })
+        });
+
+        let agent_service = AgentService::new(provider, context.clone())
+            .with_tool_registry(Arc::new(registry))
+            .with_auto_approve_tools(true)
+            .with_message_queue_callback(Some(message_queue_callback));
+
+        let session_service = SessionService::new(context.clone());
+        let session = session_service
+            .create_session(Some("Queue Test".to_string()))
+            .await
+            .unwrap();
+
+        // Send message — the mock provider will do a tool call on first LLM call,
+        // then the queue callback will inject "user follow-up" between iterations
+        let response = agent_service
+            .send_message_with_tools(session.id, "Use the test tool".to_string(), None)
+            .await
+            .unwrap();
+
+        assert!(!response.content.is_empty());
+
+        // Verify the queue was drained
+        assert!(queue.lock().await.is_none());
+
+        // Verify the injected message was saved to database
+        let message_service = MessageService::new(context);
+        let messages = message_service
+            .list_messages_for_session(session.id)
+            .await
+            .unwrap();
+
+        let user_messages: Vec<_> = messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .collect();
+
+        // Should have original message + injected follow-up
+        assert!(
+            user_messages.len() >= 2,
+            "expected at least 2 user messages (original + injected), got {}",
+            user_messages.len()
+        );
+
+        let has_followup = user_messages.iter().any(|m| m.content == "user follow-up");
+        assert!(has_followup, "injected follow-up message not found in database");
+    }
+
+    #[tokio::test]
+    async fn test_message_queue_empty_no_injection() {
+        let db = Database::connect_in_memory().await.unwrap();
+        db.run_migrations().await.unwrap();
+        let pool = db.pool().clone();
+
+        let context = ServiceContext::new(pool);
+        let provider = Arc::new(MockProviderWithTools::new());
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(MockTool));
+
+        // Empty queue — should not inject anything
+        let queue: Arc<tokio::sync::Mutex<Option<String>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
+
+        let queue_clone = queue.clone();
+        let message_queue_callback: MessageQueueCallback = Arc::new(move || {
+            let q = queue_clone.clone();
+            Box::pin(async move { q.lock().await.take() })
+        });
+
+        let agent_service = AgentService::new(provider, context.clone())
+            .with_tool_registry(Arc::new(registry))
+            .with_auto_approve_tools(true)
+            .with_message_queue_callback(Some(message_queue_callback));
+
+        let session_service = SessionService::new(context.clone());
+        let session = session_service
+            .create_session(Some("Empty Queue Test".to_string()))
+            .await
+            .unwrap();
+
+        let response = agent_service
+            .send_message_with_tools(session.id, "Use the test tool".to_string(), None)
+            .await
+            .unwrap();
+
+        assert!(!response.content.is_empty());
+
+        // Only 1 user message (the original), no injected messages
+        let message_service = MessageService::new(context);
+        let messages = message_service
+            .list_messages_for_session(session.id)
+            .await
+            .unwrap();
+
+        let user_messages: Vec<_> = messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .collect();
+
+        assert_eq!(user_messages.len(), 1, "should only have original user message");
     }
 }

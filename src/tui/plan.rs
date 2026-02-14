@@ -597,7 +597,7 @@ impl PlanTask {
             success: false,
         };
         self.execution_history.push(execution);
-        self.execution_history.last_mut().unwrap()
+        self.execution_history.last_mut().expect("just pushed")
     }
 
     /// Record a tool call in the current execution

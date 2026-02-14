@@ -214,6 +214,9 @@ pub struct App {
     // Cancellation token for aborting in-progress requests
     cancel_token: Option<CancellationToken>,
 
+    // Queued message — shared with agent so it can be injected between tool calls
+    pub(crate) message_queue: Arc<tokio::sync::Mutex<Option<String>>>,
+
     // Self-update state
     pub rebuild_status: Option<String>,
 
@@ -277,6 +280,7 @@ impl App {
             onboarding: None,
             force_onboard: false,
             cancel_token: None,
+            message_queue: Arc::new(tokio::sync::Mutex::new(None)),
             rebuild_status: None,
             session_service: SessionService::new(context.clone()),
             message_service: MessageService::new(context.clone()),
@@ -442,13 +446,12 @@ impl App {
 
         // Ctrl+C: first press clears input, second press (within 3s) quits
         if keys::is_quit(&event) {
-            if let Some(pending_at) = self.ctrl_c_pending_at {
-                if pending_at.elapsed() < std::time::Duration::from_secs(3) {
+            if let Some(pending_at) = self.ctrl_c_pending_at
+                && pending_at.elapsed() < std::time::Duration::from_secs(3) {
                     // Second Ctrl+C within window — quit
                     self.should_quit = true;
                     return Ok(());
                 }
-            }
             // First Ctrl+C — clear input and show hint
             self.input_buffer.clear();
             self.slash_suggestions_active = false;
@@ -510,8 +513,8 @@ impl App {
         match self.mode {
             AppMode::Splash => {
                 // Check if minimum display time (3 seconds) has elapsed
-                if let Some(shown_at) = self.splash_shown_at {
-                    if shown_at.elapsed() >= std::time::Duration::from_secs(3) {
+                if let Some(shown_at) = self.splash_shown_at
+                    && shown_at.elapsed() >= std::time::Duration::from_secs(3) {
                         self.splash_shown_at = None;
                         // Check if onboarding should be shown
                         if self.force_onboard
@@ -525,7 +528,6 @@ impl App {
                         }
                     }
                     // If not enough time has elapsed, ignore the key press
-                }
             }
             AppMode::Chat => self.handle_chat_key(event).await?,
             AppMode::Plan => self.handle_plan_key(event).await?,
@@ -545,13 +547,12 @@ impl App {
                     // Perform the restart
                     if let Some(session) = &self.current_session {
                         let session_id = session.id;
-                        if let Ok(updater) = SelfUpdater::auto_detect() {
-                            if let Err(e) = updater.restart(session_id) {
+                        if let Ok(updater) = SelfUpdater::auto_detect()
+                            && let Err(e) = updater.restart(session_id) {
                                 self.show_error(format!("Restart failed: {}", e));
                                 self.switch_mode(AppMode::Chat).await?;
                             }
                             // If restart succeeds, this process is replaced — we never reach here
-                        }
                     }
                 }
             }
@@ -964,15 +965,14 @@ impl App {
                             .update_session_title(session_id, new_title)
                             .await?;
                         // Update current session if it's the one being renamed
-                        if let Some(ref mut current) = self.current_session {
-                            if current.id == session_id {
+                        if let Some(ref mut current) = self.current_session
+                            && current.id == session_id {
                                 current.title = if self.session_rename_buffer.trim().is_empty() {
                                     None
                                 } else {
                                     Some(self.session_rename_buffer.trim().to_string())
                                 };
                             }
-                        }
                         self.load_sessions().await?;
                     }
                     self.session_renaming = false;
@@ -1383,7 +1383,8 @@ impl App {
     /// Send a message to the agent
     async fn send_message(&mut self, content: String) -> Result<()> {
         if self.is_processing {
-            self.push_system_message("Please wait or press Esc x2 to abort.".to_string());
+            *self.message_queue.lock().await = Some(content);
+            self.push_system_message("Message queued -- will inject between tool calls.".to_string());
             return Ok(());
         }
         if let Some(session) = &self.current_session {
@@ -1498,15 +1499,14 @@ impl App {
         self.messages.push(assistant_msg);
 
         // Update session model if not already set
-        if let Some(session) = &mut self.current_session {
-            if session.model.is_none() {
+        if let Some(session) = &mut self.current_session
+            && session.model.is_none() {
                 session.model = Some(response.model.clone());
                 // Save the updated session to database
                 if let Err(e) = self.session_service.update_session(session).await {
                     tracing::warn!("Failed to update session model: {}", e);
                 }
             }
-        }
 
         // Auto-scroll to bottom
         self.scroll_offset = 0;
@@ -2211,8 +2211,8 @@ impl App {
                 self.model_selector_selected = (self.model_selector_selected + 1)
                     .min(self.model_selector_models.len() - 1);
             }
-        } else if keys::is_enter(&event) {
-            if let Some(model) = self.model_selector_models.get(self.model_selector_selected) {
+        } else if keys::is_enter(&event)
+            && let Some(model) = self.model_selector_models.get(self.model_selector_selected) {
                 let model_name = model.clone();
                 // Update session model
                 if let Some(session) = &mut self.current_session {
@@ -2224,7 +2224,6 @@ impl App {
                 self.push_system_message(format!("Model changed to: {}", model_name));
                 self.mode = AppMode::Chat;
             }
-        }
 
         Ok(())
     }

@@ -106,7 +106,7 @@ impl AnthropicProvider {
         );
         headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            "application/json".parse().expect("valid content-type"),
         );
         headers
     }

@@ -170,8 +170,8 @@ pub async fn run() -> Result<()> {
     // This prevents the onboarding wizard from triggering when .env is already set up.
     let config_path = dirs::config_dir()
         .map(|d| d.join("opencrabs").join("config.toml"));
-    if let Some(ref path) = config_path {
-        if !path.exists() && config.has_any_api_key() {
+    if let Some(ref path) = config_path
+        && !path.exists() && config.has_any_api_key() {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
@@ -181,7 +181,6 @@ pub async fn run() -> Result<()> {
                 tracing::info!("Auto-generated config.toml from environment");
             }
         }
-    }
 
     match cli.command {
         None | Some(Commands::Chat { .. }) => {
@@ -731,14 +730,22 @@ async fn cmd_chat(config: &crate::config::Config, _session_id: Option<String>, f
         }
     });
 
-    // Create agent service with approval callback and progress callback
-    tracing::debug!("Creating agent service with approval and progress callbacks");
+    // Create message queue callback that checks for queued user messages
+    let message_queue = app.message_queue.clone();
+    let message_queue_callback: crate::llm::agent::MessageQueueCallback = Arc::new(move || {
+        let queue = message_queue.clone();
+        Box::pin(async move { queue.lock().await.take() })
+    });
+
+    // Create agent service with approval callback, progress callback, and message queue
+    tracing::debug!("Creating agent service with approval, progress, and message queue callbacks");
     let agent_service = Arc::new(
         AgentService::new(provider.clone(), service_context.clone())
             .with_system_brain(system_brain)
             .with_tool_registry(Arc::new(tool_registry))
             .with_approval_callback(Some(approval_callback))
             .with_progress_callback(Some(progress_callback))
+            .with_message_queue_callback(Some(message_queue_callback))
             .with_max_tool_iterations(20)
             .with_working_directory(working_directory),
     );
@@ -1012,12 +1019,11 @@ async fn cmd_logs(operation: LogCommands) -> Result<()> {
                         file_count += 1;
                         if let Ok(metadata) = entry.metadata() {
                             total_size += metadata.len();
-                            if let Ok(modified) = metadata.modified() {
-                                if modified > newest_time {
+                            if let Ok(modified) = metadata.modified()
+                                && modified > newest_time {
                                     newest_time = modified;
                                     newest_file = Some(path);
                                 }
-                            }
                         }
                     }
                 }

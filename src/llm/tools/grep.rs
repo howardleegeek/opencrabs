@@ -247,11 +247,10 @@ impl GrepTool {
                 *total_matches += 1;
 
                 // Check limit
-                if let Some(limit) = input.limit {
-                    if matches.len() >= limit {
+                if let Some(limit) = input.limit
+                    && matches.len() >= limit {
                         return Ok(());
                     }
-                }
 
                 let mut result = String::new();
                 result.push_str(&format!("{}:", display_path));
@@ -306,22 +305,20 @@ impl GrepTool {
                 let path = entry.path();
 
                 // Check limit
-                if let Some(limit) = input.limit {
-                    if matches.len() >= limit {
+                if let Some(limit) = input.limit
+                    && matches.len() >= limit {
                         return Ok(());
                     }
-                }
 
                 if path.is_file() {
                     self.search_file(&path, regex, input, matches, total_matches)
                         .await?;
                 } else if path.is_dir() {
                     // Skip hidden directories
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with('.') {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                        && name.starts_with('.') {
                             continue;
                         }
-                    }
                     self.search_directory(&path, regex, input, matches, total_matches)
                         .await?;
                 }

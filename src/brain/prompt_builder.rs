@@ -183,13 +183,12 @@ impl BrainLoader {
         }
 
         // 9. Slash commands list
-        if let Some(commands_section) = slash_commands_section {
-            if !commands_section.is_empty() {
+        if let Some(commands_section) = slash_commands_section
+            && !commands_section.is_empty() {
                 prompt.push_str("--- Available Slash Commands ---\n");
                 prompt.push_str(commands_section);
                 prompt.push_str("\n\n");
             }
-        }
 
         prompt
     }

@@ -43,8 +43,8 @@ pub fn render(f: &mut Frame, app: &App) {
                 if line.is_empty() {
                     1
                 } else {
-                    // Account for "  " padding prefix
-                    (line.len() + 2).div_ceil(terminal_width.max(1))
+                    // Account for "  " padding prefix using display width
+                    (UnicodeWidthStr::width(line) + 2).div_ceil(terminal_width.max(1))
                 }
             })
             .sum::<usize>()
@@ -229,7 +229,7 @@ fn wrap_line_with_padding<'a>(line: Line<'a>, max_width: usize, padding: &'a str
 
 /// Find the byte index in `s` where the cumulative display width first reaches or exceeds `target_width`.
 /// Always returns a valid char boundary.
-fn char_boundary_at_width(s: &str, target_width: usize) -> usize {
+pub(super) fn char_boundary_at_width(s: &str, target_width: usize) -> usize {
     let mut width = 0;
     for (idx, ch) in s.char_indices() {
         let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
@@ -260,8 +260,8 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Show banner if there's a pending plan
-    if let Some(ref plan) = app.current_plan {
-        if matches!(plan.status, crate::tui::plan::PlanStatus::PendingApproval) {
+    if let Some(ref plan) = app.current_plan
+        && matches!(plan.status, crate::tui::plan::PlanStatus::PendingApproval) {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled("  ⚠️  ", Style::default().fg(Color::Rgb(184, 134, 11))),
@@ -292,7 +292,6 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
             )));
             lines.push(Line::from(""));
         }
-    }
 
     // Get the model name from the current session
     let model_name = app
@@ -345,8 +344,8 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
             }
             lines.push(Line::from(spans));
             // Show expanded details
-            if msg.expanded {
-                if let Some(ref details) = msg.details {
+            if msg.expanded
+                && let Some(ref details) = msg.details {
                     for detail_line in details.lines() {
                         lines.push(Line::from(vec![
                             Span::styled("    ", Style::default()),
@@ -357,7 +356,6 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
                         ]));
                     }
                 }
-            }
             lines.push(Line::from(""));
             continue;
         }
@@ -608,8 +606,8 @@ fn render_inline_approval<'a>(
                     ]));
                 }
                 lines.push(Line::from(""));
-            } else if let Some(obj) = approval.tool_input.as_object() {
-                if !obj.is_empty() {
+            } else if let Some(obj) = approval.tool_input.as_object()
+                && !obj.is_empty() {
                     lines.push(Line::from(vec![Span::styled(
                         "  Parameters:",
                         Style::default().fg(Color::DarkGray),
@@ -650,7 +648,6 @@ fn render_inline_approval<'a>(
                     }
                     lines.push(Line::from(""));
                 }
-            }
 
             // Option descriptions for the selected item
             // Option colors: green for safe, yellow for session, red for yolo
@@ -1815,5 +1812,139 @@ fn render_restart_dialog(f: &mut Frame, app: &App, area: Rect) {
             .border_style(Style::default().fg(Color::Green)),
     );
     f.render_widget(dialog, dialog_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── char_boundary_at_width ──────────────────────────────────────
+
+    #[test]
+    fn test_char_boundary_ascii() {
+        assert_eq!(char_boundary_at_width("hello", 3), 3);
+        assert_eq!(char_boundary_at_width("hello", 5), 5);
+        assert_eq!(char_boundary_at_width("hello", 10), 5); // past end
+    }
+
+    #[test]
+    fn test_char_boundary_multibyte() {
+        // █ (U+2588) is 3 bytes, 1 display column
+        let s = "ab█cd";
+        // display widths: a=1, b=1, █=1, c=1, d=1 → total 5
+        // byte positions: a=0, b=1, █=2..5, c=5, d=6
+        assert_eq!(char_boundary_at_width(s, 2), 2); // after 'b'
+        assert_eq!(char_boundary_at_width(s, 3), 5); // after '█'
+        assert_eq!(char_boundary_at_width(s, 4), 6); // after 'c'
+    }
+
+    #[test]
+    fn test_char_boundary_wide_chars() {
+        // CJK character '中' is 3 bytes, 2 display columns
+        let s = "a中b";
+        // display widths: a=1, 中=2, b=1 → total 4
+        // byte positions: a=0, 中=1..4, b=4
+        assert_eq!(char_boundary_at_width(s, 1), 1); // after 'a'
+        assert_eq!(char_boundary_at_width(s, 2), 1); // '中' won't fit in 1 remaining col
+        assert_eq!(char_boundary_at_width(s, 3), 4); // after '中'
+    }
+
+    #[test]
+    fn test_char_boundary_empty() {
+        assert_eq!(char_boundary_at_width("", 5), 0);
+        assert_eq!(char_boundary_at_width("hello", 0), 0);
+    }
+
+    // ── char_boundary_at_width_from_end ─────────────────────────────
+
+    #[test]
+    fn test_char_boundary_from_end_ascii() {
+        let s = "hello world";
+        let idx = char_boundary_at_width_from_end(s, 5);
+        assert_eq!(&s[idx..], "world");
+    }
+
+    #[test]
+    fn test_char_boundary_from_end_multibyte() {
+        // "abc██" → display width 5, bytes: a=0, b=1, c=2, █=3..6, █=6..9
+        let s = "abc██";
+        let idx = char_boundary_at_width_from_end(s, 2); // last 2 display cols = "██"
+        assert_eq!(&s[idx..], "██");
+    }
+
+    #[test]
+    fn test_char_boundary_from_end_wider_than_string() {
+        let s = "hi";
+        assert_eq!(char_boundary_at_width_from_end(s, 100), 0);
+    }
+
+    // ── wrap_line_with_padding ──────────────────────────────────────
+
+    #[test]
+    fn test_wrap_ascii_fits() {
+        let line = Line::from("short line");
+        let result = wrap_line_with_padding(line, 80, "  ");
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_wrap_ascii_wraps() {
+        let line = Line::from("this is a longer line that should wrap");
+        let result = wrap_line_with_padding(line, 20, "  ");
+        assert!(result.len() > 1, "expected wrapping, got {} lines", result.len());
+    }
+
+    #[test]
+    fn test_wrap_multibyte_no_panic() {
+        // This is the exact scenario that caused the original panic
+        let text = format!("some text with a block char █ at the end{}", "█");
+        let line = Line::from(text);
+        // Should not panic
+        let result = wrap_line_with_padding(line, 30, "  ");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_wrap_emoji_no_panic() {
+        let line = Line::from("🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀");
+        let result = wrap_line_with_padding(line, 10, "  ");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_wrap_cjk_no_panic() {
+        // CJK chars are 2 display columns each
+        let line = Line::from("中文测试字符串需要正确换行处理");
+        let result = wrap_line_with_padding(line, 10, "  ");
+        assert!(result.len() > 1);
+    }
+
+    #[test]
+    fn test_wrap_mixed_multibyte_and_spaces() {
+        let line = Line::from("hello █ world █ test █ more █ text █ end");
+        let result = wrap_line_with_padding(line, 15, "  ");
+        assert!(result.len() > 1);
+        // Verify all lines produce valid strings
+        for l in &result {
+            let _s: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+        }
+    }
+
+    #[test]
+    fn test_wrap_zero_width() {
+        let line = Line::from("test");
+        let result = wrap_line_with_padding(line, 0, "  ");
+        assert_eq!(result.len(), 1); // zero width returns original
+    }
+
+    #[test]
+    fn test_wrap_cursor_char() {
+        // Simulates the input buffer with cursor: the exact crash scenario
+        let mut input = "next I just noticed something weird like if I keep on this window it is always super fast".to_string();
+        input.push('\u{2588}'); // cursor char █
+        let line = Line::from(format!("  {}", input));
+        let result = wrap_line_with_padding(line, 170, "  ");
+        assert!(!result.is_empty());
+    }
 }
 

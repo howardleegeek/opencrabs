@@ -95,8 +95,8 @@ impl Tool for WriteTool {
         };
 
         // Create parent directories if requested (before path validation)
-        if input.create_dirs {
-            if let Some(parent) = path.parent() {
+        if input.create_dirs
+            && let Some(parent) = path.parent() {
                 // Validate parent path is within working directory
                 let canonical_wd = context.working_directory.canonicalize().map_err(|e| {
                     ToolError::Internal(format!("Failed to canonicalize working directory: {}", e))
@@ -118,7 +118,6 @@ impl Tool for WriteTool {
 
                 fs::create_dir_all(parent).await.map_err(ToolError::Io)?;
             }
-        }
 
         // Validate path is safe and within working directory (prevents path traversal)
         let path = match validate_path_safety(&input.path, &context.working_directory) {
@@ -145,14 +144,13 @@ impl Tool for WriteTool {
         };
 
         // Check if parent directory exists (safety check after validation)
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
+        if let Some(parent) = path.parent()
+            && !parent.exists() {
                 return Ok(ToolResult::error(format!(
                     "Parent directory does not exist: {}. Use create_dirs: true to create it.",
                     parent.display()
                 )));
             }
-        }
 
         // Write the file
         fs::write(&path, &input.content)

@@ -115,7 +115,7 @@ impl OpenAIProvider {
 
         headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            "application/json".parse().expect("valid content-type"),
         );
 
         headers
@@ -272,11 +272,10 @@ impl OpenAIProvider {
         let mut content_blocks = Vec::new();
 
         // Add text content if present
-        if let Some(content) = choice.message.content {
-            if !content.is_empty() {
+        if let Some(content) = choice.message.content
+            && !content.is_empty() {
                 content_blocks.push(ContentBlock::Text { text: content });
             }
-        }
 
         // Convert tool_calls to ToolUse content blocks
         if let Some(tool_calls) = choice.message.tool_calls {
@@ -515,10 +514,10 @@ impl Provider for OpenAIProvider {
                             // Parse JSON chunk
                             match serde_json::from_str::<OpenAIStreamChunk>(json_str) {
                                 Ok(chunk) => {
-                                    if let Some(choice) = chunk.choices.first() {
-                                        if let Some(ref delta) = choice.delta {
-                                            if let Some(ref content) = delta.content {
-                                                if !content.is_empty() {
+                                    if let Some(choice) = chunk.choices.first()
+                                        && let Some(ref delta) = choice.delta
+                                            && let Some(ref content) = delta.content
+                                                && !content.is_empty() {
                                                     return StreamEvent::ContentBlockDelta {
                                                         index: 0,
                                                         delta: ContentDelta::TextDelta {
@@ -526,9 +525,6 @@ impl Provider for OpenAIProvider {
                                                         },
                                                     };
                                                 }
-                                            }
-                                        }
-                                    }
                                 }
                                 Err(e) => {
                                     tracing::warn!(
