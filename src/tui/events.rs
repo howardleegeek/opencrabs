@@ -59,6 +59,12 @@ pub enum TuiEvent {
 
     /// Tool approval response
     ToolApprovalResponse(ToolApprovalResponse),
+
+    /// A tool call has started executing
+    ToolCallStarted { tool_name: String, tool_input: Value },
+
+    /// A tool call has completed
+    ToolCallCompleted { tool_name: String, tool_input: Value, success: bool, summary: String },
 }
 
 /// Tool approval request details
@@ -87,16 +93,9 @@ pub struct ToolApprovalRequest {
 }
 
 impl ToolApprovalRequest {
-    /// Check if this approval request has timed out (default: 5 minutes)
-    pub fn is_timed_out(&self) -> bool {
-        self.requested_at.elapsed() > std::time::Duration::from_secs(300)
-    }
-
-    /// Get remaining time before timeout
-    pub fn time_remaining(&self) -> std::time::Duration {
-        let timeout = std::time::Duration::from_secs(300);
-        let elapsed = self.requested_at.elapsed();
-        timeout.saturating_sub(elapsed)
+    /// How long this request has been waiting
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.requested_at.elapsed()
     }
 }
 

@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// Slash command definition
@@ -53,7 +54,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/approve",
-        description: "Reset tool approval policy",
+        description: "Tool approval policy",
     },
 ];
 
@@ -88,6 +89,20 @@ pub struct ApprovalData {
     pub show_details: bool,      // V key toggle
 }
 
+/// State for the /approve policy selector menu
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApproveMenuState {
+    Pending,
+    Selected(usize),
+}
+
+/// Data for the /approve inline menu
+#[derive(Debug, Clone)]
+pub struct ApproveMenu {
+    pub selected_option: usize, // 0-2
+    pub state: ApproveMenuState,
+}
+
 /// Display message for UI rendering
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
@@ -98,6 +113,11 @@ pub struct DisplayMessage {
     pub token_count: Option<i32>,
     pub cost: Option<f64>,
     pub approval: Option<ApprovalData>,
+    pub approve_menu: Option<ApproveMenu>,
+    /// Collapsible details (tool output, etc.) — shown when expanded
+    pub details: Option<String>,
+    /// Whether details are currently expanded
+    pub expanded: bool,
 }
 
 impl From<Message> for DisplayMessage {
@@ -110,6 +130,9 @@ impl From<Message> for DisplayMessage {
             token_count: msg.token_count,
             cost: msg.cost,
             approval: None,
+            approve_menu: None,
+            details: None,
+            expanded: false,
         }
     }
 }
@@ -188,6 +211,9 @@ pub struct App {
     pub onboarding: Option<OnboardingWizard>,
     pub force_onboard: bool,
 
+    // Cancellation token for aborting in-progress requests
+    cancel_token: Option<CancellationToken>,
+
     // Self-update state
     pub rebuild_status: Option<String>,
 
@@ -250,6 +276,7 @@ impl App {
             user_commands,
             onboarding: None,
             force_onboard: false,
+            cancel_token: None,
             rebuild_status: None,
             session_service: SessionService::new(context.clone()),
             message_service: MessageService::new(context.clone()),
@@ -360,43 +387,6 @@ impl App {
             TuiEvent::Tick => {
                 // Update animation frame for spinner
                 self.animation_frame = self.animation_frame.wrapping_add(1);
-
-                // Check for approval timeout — scan messages for pending approvals
-                let timed_out: Option<(Uuid, mpsc::UnboundedSender<ToolApprovalResponse>)> = self
-                    .messages
-                    .iter()
-                    .rev()
-                    .find_map(|m| m.approval.as_ref())
-                    .filter(|a| {
-                        a.state == ApprovalState::Pending
-                            && a.requested_at.elapsed() > std::time::Duration::from_secs(300)
-                    })
-                    .map(|a| (a.request_id, a.response_tx.clone()));
-
-                if let Some((request_id, response_tx)) = timed_out {
-                    tracing::warn!("Approval request {} timed out after 5 minutes", request_id);
-
-                    let response = ToolApprovalResponse {
-                        request_id,
-                        approved: false,
-                        reason: Some("Approval request timed out after 5 minutes".to_string()),
-                    };
-                    let _ = response_tx.send(response.clone());
-                    let _ = self.event_sender().send(TuiEvent::ToolApprovalResponse(response));
-
-                    // Update state in the message
-                    if let Some(approval) = self
-                        .messages
-                        .iter_mut()
-                        .rev()
-                        .find_map(|m| m.approval.as_mut())
-                        .filter(|a| a.state == ApprovalState::Pending)
-                    {
-                        approval.state = ApprovalState::Denied("Timed out after 5 minutes".to_string());
-                    }
-
-                    self.error_message = Some("Approval request timed out".to_string());
-                }
             }
             TuiEvent::ToolApprovalRequested(request) => {
                 self.handle_approval_requested(request);
@@ -404,6 +394,22 @@ impl App {
             TuiEvent::ToolApprovalResponse(_response) => {
                 // Response is sent via channel, just auto-scroll
                 self.scroll_offset = 0;
+            }
+            TuiEvent::ToolCallStarted { .. } => {
+                // Silenced — completion message shows what happened
+            }
+            TuiEvent::ToolCallCompleted { tool_name, tool_input, success, summary } => {
+                let desc = Self::format_tool_description(&tool_name, &tool_input);
+                if success {
+                    let details = if summary.is_empty() { None } else { Some(summary) };
+                    if let Some(det) = details {
+                        self.push_system_message_with_details(desc, det);
+                    } else {
+                        self.push_system_message(desc);
+                    }
+                } else {
+                    self.push_system_message(format!("{} -- FAILED: {}", desc, summary));
+                }
             }
             TuiEvent::Resize(_, _) | TuiEvent::AgentProcessing => {
                 // These are handled by the render loop
@@ -585,10 +591,93 @@ impl App {
         })
     }
 
+    fn has_pending_approve_menu(&self) -> bool {
+        self.messages.iter().rev().any(|msg| {
+            msg.approve_menu
+                .as_ref()
+                .is_some_and(|m| m.state == ApproveMenuState::Pending)
+        })
+    }
+
     /// Handle keys in chat mode
     async fn handle_chat_key(&mut self, event: crossterm::event::KeyEvent) -> Result<()> {
         use super::events::keys;
         use crossterm::event::{KeyCode, KeyModifiers};
+
+        // Intercept keys when /approve menu is pending
+        if self.has_pending_approve_menu() {
+            if keys::is_up(&event) {
+                if let Some(menu) = self.messages.iter_mut().rev()
+                    .find_map(|m| m.approve_menu.as_mut())
+                    .filter(|m| m.state == ApproveMenuState::Pending)
+                {
+                    menu.selected_option = menu.selected_option.saturating_sub(1);
+                }
+                return Ok(());
+            } else if keys::is_down(&event) {
+                if let Some(menu) = self.messages.iter_mut().rev()
+                    .find_map(|m| m.approve_menu.as_mut())
+                    .filter(|m| m.state == ApproveMenuState::Pending)
+                {
+                    menu.selected_option = (menu.selected_option + 1).min(2);
+                }
+                return Ok(());
+            } else if keys::is_enter(&event) || keys::is_submit(&event) {
+                let selected = self.messages.iter()
+                    .rev()
+                    .find_map(|m| m.approve_menu.as_ref())
+                    .filter(|m| m.state == ApproveMenuState::Pending)
+                    .map(|m| m.selected_option)
+                    .unwrap_or(0);
+
+                // Apply policy
+                match selected {
+                    0 => {
+                        // Reset to approve-only
+                        self.approval_auto_session = false;
+                        self.approval_auto_always = false;
+                    }
+                    1 => {
+                        // Allow all for this session
+                        self.approval_auto_session = true;
+                        self.approval_auto_always = false;
+                    }
+                    _ => {
+                        // Yolo mode
+                        self.approval_auto_session = false;
+                        self.approval_auto_always = true;
+                    }
+                }
+
+                let label = match selected {
+                    0 => "Approve-only (always ask)",
+                    1 => "Allow all for this session",
+                    _ => "Yolo mode (execute without approval)",
+                };
+
+                // Mark menu as resolved
+                if let Some(menu) = self.messages.iter_mut().rev()
+                    .find_map(|m| m.approve_menu.as_mut())
+                    .filter(|m| m.state == ApproveMenuState::Pending)
+                {
+                    menu.state = ApproveMenuState::Selected(selected);
+                }
+
+                self.push_system_message(format!("Approval policy set to: {}", label));
+                return Ok(());
+            } else if keys::is_cancel(&event) {
+                // Cancel — dismiss menu without changing policy
+                if let Some(menu) = self.messages.iter_mut().rev()
+                    .find_map(|m| m.approve_menu.as_mut())
+                    .filter(|m| m.state == ApproveMenuState::Pending)
+                {
+                    menu.state = ApproveMenuState::Selected(99); // sentinel for cancelled
+                }
+                self.push_system_message("Approval policy unchanged.".to_string());
+                return Ok(());
+            }
+            return Ok(());
+        }
 
         // Intercept keys when an inline approval is pending
         if self.has_pending_approval() {
@@ -762,8 +851,30 @@ impl App {
             self.slash_suggestions_active = false;
             self.send_message(content).await?;
         } else if keys::is_cancel(&event) {
-            // Double-Escape to clear input (with 3-second window)
-            if self.input_buffer.is_empty() {
+            // When processing, double-Escape aborts the operation
+            if self.is_processing {
+                if let Some(pending_at) = self.escape_pending_at {
+                    if pending_at.elapsed() < std::time::Duration::from_secs(3) {
+                        // Second Escape within 3 seconds — abort
+                        if let Some(token) = &self.cancel_token {
+                            token.cancel();
+                        }
+                        self.is_processing = false;
+                        self.streaming_response = None;
+                        self.cancel_token = None;
+                        self.escape_pending_at = None;
+                        self.push_system_message("Operation cancelled.".to_string());
+                    } else {
+                        self.escape_pending_at = Some(std::time::Instant::now());
+                        self.error_message =
+                            Some("Press Esc again to abort".to_string());
+                    }
+                } else {
+                    self.escape_pending_at = Some(std::time::Instant::now());
+                    self.error_message =
+                        Some("Press Esc again to abort".to_string());
+                }
+            } else if self.input_buffer.is_empty() {
                 // Nothing to clear, just dismiss error
                 self.error_message = None;
                 self.escape_pending_at = None;
@@ -785,6 +896,11 @@ impl App {
                 self.escape_pending_at = Some(std::time::Instant::now());
                 self.error_message =
                     Some("Press Esc again to clear input".to_string());
+            }
+        } else if event.code == KeyCode::Char('o') && event.modifiers == KeyModifiers::CONTROL {
+            // Ctrl+O — toggle expand/collapse on the most recent expandable system message
+            if let Some(msg) = self.messages.iter_mut().rev().find(|m| m.details.is_some()) {
+                msg.expanded = !msg.expanded;
             }
         } else if keys::is_page_up(&event) {
             self.scroll_offset = self.scroll_offset.saturating_add(10);
@@ -1124,11 +1240,22 @@ impl App {
                 true
             }
             "/approve" => {
-                self.approval_auto_session = false;
-                self.approval_auto_always = false;
-                self.push_system_message(
-                    "Tool approval reset — all tools will require manual approval.".to_string(),
-                );
+                self.messages.push(DisplayMessage {
+                    id: Uuid::new_v4(),
+                    role: "system".to_string(),
+                    content: String::new(),
+                    timestamp: chrono::Utc::now(),
+                    token_count: None,
+                    cost: None,
+                    approval: None,
+                    approve_menu: Some(ApproveMenu {
+                        selected_option: 0,
+                        state: ApproveMenuState::Pending,
+                    }),
+                    details: None,
+                    expanded: false,
+                });
+                self.scroll_offset = 0;
                 true
             }
             "/help" => {
@@ -1162,6 +1289,55 @@ impl App {
         }
     }
 
+    /// Format a human-readable description of a tool call from its name and input
+    fn format_tool_description(tool_name: &str, tool_input: &Value) -> String {
+        match tool_name {
+            "bash" => {
+                let cmd = tool_input.get("command").and_then(|v| v.as_str()).unwrap_or("?");
+                let short: String = cmd.chars().take(80).collect();
+                if cmd.len() > 80 {
+                    format!("bash: {}...", short)
+                } else {
+                    format!("bash: {}", short)
+                }
+            }
+            "read" => {
+                let path = tool_input.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
+                format!("Read {}", path)
+            }
+            "write" => {
+                let path = tool_input.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
+                format!("Wrote {}", path)
+            }
+            "edit" => {
+                let path = tool_input.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
+                format!("Edited {}", path)
+            }
+            "ls" => {
+                let path = tool_input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                format!("Listed {}", path)
+            }
+            "glob" => {
+                let pattern = tool_input.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+                format!("Glob {}", pattern)
+            }
+            "grep" => {
+                let pattern = tool_input.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+                let path = tool_input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                if path.is_empty() {
+                    format!("Grep '{}'", pattern)
+                } else {
+                    format!("Grep '{}' in {}", pattern, path)
+                }
+            }
+            "web_search" => {
+                let query = tool_input.get("query").and_then(|v| v.as_str()).unwrap_or("?");
+                format!("Search: {}", query)
+            }
+            other => other.to_string(),
+        }
+    }
+
     /// Push a system message into the chat display
     fn push_system_message(&mut self, content: String) {
         self.messages.push(DisplayMessage {
@@ -1172,12 +1348,36 @@ impl App {
             token_count: None,
             cost: None,
             approval: None,
+            approve_menu: None,
+            details: None,
+            expanded: false,
+        });
+        self.scroll_offset = 0;
+    }
+
+    /// Push a system message with collapsible details
+    fn push_system_message_with_details(&mut self, content: String, details: String) {
+        self.messages.push(DisplayMessage {
+            id: Uuid::new_v4(),
+            role: "system".to_string(),
+            content,
+            timestamp: chrono::Utc::now(),
+            token_count: None,
+            cost: None,
+            approval: None,
+            approve_menu: None,
+            details: Some(details),
+            expanded: false,
         });
         self.scroll_offset = 0;
     }
 
     /// Send a message to the agent
     async fn send_message(&mut self, content: String) -> Result<()> {
+        if self.is_processing {
+            self.push_system_message("Please wait or press Esc x2 to abort.".to_string());
+            return Ok(());
+        }
         if let Some(session) = &self.current_session {
             self.is_processing = true;
             self.error_message = None;
@@ -1199,11 +1399,18 @@ impl App {
                 token_count: None,
                 cost: None,
                 approval: None,
+                approve_menu: None,
+                details: None,
+                expanded: false,
             };
             self.messages.push(user_msg);
 
             // Auto-scroll to show the new user message
             self.scroll_offset = 0;
+
+            // Create cancellation token for this request
+            let token = CancellationToken::new();
+            self.cancel_token = Some(token.clone());
 
             // Send transformed content to agent in background
             let agent_service = self.agent_service.clone();
@@ -1218,6 +1425,7 @@ impl App {
                         transformed_content,
                         None,
                         read_only_mode,
+                        Some(token),
                     )
                     .await
                 {
@@ -1252,6 +1460,7 @@ impl App {
     ) -> Result<()> {
         self.is_processing = false;
         self.streaming_response = None;
+        self.cancel_token = None;
 
         // Reload user commands (agent may have written new ones to commands.json)
         self.reload_user_commands();
@@ -1274,6 +1483,9 @@ impl App {
             ),
             cost: Some(response.cost),
             approval: None,
+            approve_menu: None,
+            details: None,
+            expanded: false,
         };
         self.messages.push(assistant_msg);
 
@@ -1299,13 +1511,16 @@ impl App {
                 let error_msg = DisplayMessage {
                     id: uuid::Uuid::new_v4(),
                     role: "system".to_string(),
-                    content: "⚠️ Plan execution stopped due to task failure. \
+                    content: "Plan execution stopped due to task failure. \
                              Review the error above and decide how to proceed."
                         .to_string(),
                     timestamp: chrono::Utc::now(),
                     token_count: None,
                     cost: None,
                     approval: None,
+                    approve_menu: None,
+                    details: None,
+                    expanded: false,
                 };
                 self.messages.push(error_msg);
             } else {
@@ -1476,19 +1691,22 @@ impl App {
                             id: Uuid::new_v4(),
                             role: "system".to_string(),
                             content: format!(
-                                "✅ Plan '{}' is ready!\n\n\
-                                 {} tasks • Press Ctrl+P to review\n\n\
+                                "Plan '{}' is ready!\n\n\
+                                 {} tasks - Press Ctrl+P to review\n\n\
                                  Actions:\n\
-                                 • Ctrl+A: Approve and execute\n\
-                                 • Ctrl+R: Reject\n\
-                                 • Ctrl+I: Request changes\n\
-                                 • Ctrl+P: View plan",
+                                 Ctrl+A: Approve and execute\n\
+                                 Ctrl+R: Reject\n\
+                                 Ctrl+I: Request changes\n\
+                                 Ctrl+P: View plan",
                                 plan_title, task_count
                             ),
                             timestamp: chrono::Utc::now(),
                             token_count: None,
                             cost: None,
                             approval: None,
+                            approve_menu: None,
+                            details: None,
+                            expanded: false,
                         };
 
                         self.messages.push(notification);
@@ -1545,19 +1763,22 @@ impl App {
                                     id: Uuid::new_v4(),
                                     role: "system".to_string(),
                                     content: format!(
-                                        "✅ Plan '{}' is ready!\n\n\
-                                         {} tasks • Press Ctrl+P to review\n\n\
+                                        "Plan '{}' is ready!\n\n\
+                                         {} tasks - Press Ctrl+P to review\n\n\
                                          Actions:\n\
-                                         • Ctrl+A: Approve and execute\n\
-                                         • Ctrl+R: Reject\n\
-                                         • Ctrl+I: Request changes\n\
-                                         • Ctrl+P: View plan",
+                                         Ctrl+A: Approve and execute\n\
+                                         Ctrl+R: Reject\n\
+                                         Ctrl+I: Request changes\n\
+                                         Ctrl+P: View plan",
                                         plan_title, task_count
                                     ),
                                     timestamp: chrono::Utc::now(),
                                     token_count: None,
                                     cost: None,
                                     approval: None,
+                                    approve_menu: None,
+                                    details: None,
+                                    expanded: false,
                                 };
 
                                 self.messages.push(notification);
@@ -1788,7 +2009,7 @@ impl App {
                 id: uuid::Uuid::new_v4(),
                 role: "system".to_string(),
                 content: format!(
-                    "✅ Plan '{}' completed successfully!\n\
+                    "Plan '{}' completed successfully!\n\
                      All {} tasks have been executed.",
                     title, task_count
                 ),
@@ -1796,6 +2017,9 @@ impl App {
                 token_count: None,
                 cost: None,
                 approval: None,
+                approve_menu: None,
+                details: None,
+                expanded: false,
             };
             self.messages.push(completion_msg);
         } else if let Some(message) = task_message {
@@ -1810,6 +2034,7 @@ impl App {
     fn show_error(&mut self, error: String) {
         self.is_processing = false;
         self.streaming_response = None;
+        self.cancel_token = None;
         self.error_message = Some(error);
         // Auto-scroll to show the error
         self.scroll_offset = 0;
@@ -1839,7 +2064,7 @@ impl App {
 
     /// Handle tool approval request — inline in chat
     fn handle_approval_requested(&mut self, request: ToolApprovalRequest) {
-        // Auto-approve if policy allows
+        // Auto-approve silently if policy allows
         if self.approval_auto_always || self.approval_auto_session {
             let response = ToolApprovalResponse {
                 request_id: request.request_id,
@@ -1848,33 +2073,6 @@ impl App {
             };
             let _ = request.response_tx.send(response.clone());
             let _ = self.event_sender().send(TuiEvent::ToolApprovalResponse(response));
-
-            // Add compact auto-approved message
-            self.messages.push(DisplayMessage {
-                id: Uuid::new_v4(),
-                role: "approval".to_string(),
-                content: String::new(),
-                timestamp: chrono::Utc::now(),
-                token_count: None,
-                cost: None,
-                approval: Some(ApprovalData {
-                    tool_name: request.tool_name,
-                    tool_description: request.tool_description,
-                    tool_input: request.tool_input,
-                    capabilities: request.capabilities,
-                    request_id: request.request_id,
-                    response_tx: request.response_tx,
-                    requested_at: request.requested_at,
-                    state: ApprovalState::Approved(if self.approval_auto_always {
-                        ApprovalOption::AllowAlways
-                    } else {
-                        ApprovalOption::AllowForSession
-                    }),
-                    selected_option: 0,
-                    show_details: false,
-                }),
-            });
-            self.scroll_offset = 0;
             return;
         }
 
@@ -1898,6 +2096,9 @@ impl App {
                 selected_option: 0,
                 show_details: false,
             }),
+            approve_menu: None,
+            details: None,
+            expanded: false,
         });
         self.scroll_offset = 0;
         // Stay in AppMode::Chat — no mode switch

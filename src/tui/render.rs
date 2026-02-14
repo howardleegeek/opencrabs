@@ -273,20 +273,53 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
             continue;
         }
 
+        // Render /approve policy menu
+        if let Some(ref menu) = msg.approve_menu {
+            render_approve_menu(&mut lines, menu, content_width);
+            lines.push(Line::from(""));
+            continue;
+        }
+
         if msg.role == "system" {
-            // System messages: compact, DarkGray italic, ℹ️ prefix, no separator
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "  ℹ️  ",
-                    Style::default().fg(Color::DarkGray),
-                ),
+            // System messages: compact, DarkGray italic, no separator
+            let mut spans = vec![
+                Span::styled("  ", Style::default()),
                 Span::styled(
                     &msg.content,
                     Style::default()
                         .fg(Color::DarkGray)
                         .add_modifier(Modifier::ITALIC),
                 ),
-            ]));
+            ];
+            // Show expand/collapse hint if this message has details
+            if msg.details.is_some() {
+                if msg.expanded {
+                    spans.push(Span::styled(
+                        " (ctrl+o to collapse)",
+                        Style::default().fg(Color::Rgb(100, 100, 100)),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        " (ctrl+o to expand)",
+                        Style::default().fg(Color::Rgb(100, 100, 100)),
+                    ));
+                }
+            }
+            lines.push(Line::from(spans));
+            // Show expanded details
+            if msg.expanded {
+                if let Some(ref details) = msg.details {
+                    for detail_line in details.lines() {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(
+                                detail_line.to_string(),
+                                Style::default().fg(Color::Rgb(120, 120, 120)),
+                            ),
+                        ]));
+                    }
+                }
+            }
             lines.push(Line::from(""));
             continue;
         }
@@ -419,10 +452,8 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
 fn render_input(f: &mut Frame, app: &App, area: Rect) {
     let mut input_text = app.input_buffer.clone();
 
-    // Add cursor indicator
-    if !app.is_processing {
-        input_text.push('█');
-    }
+    // Always show cursor (input stays active during processing)
+    input_text.push('\u{2588}');
 
     let input_content_width = area.width.saturating_sub(2) as usize; // borders
     let mut input_lines: Vec<Line> = Vec::new();
@@ -438,8 +469,10 @@ fn render_input(f: &mut Frame, app: &App, area: Rect) {
 
     let title = if app.is_processing {
         Span::styled(
-            " Waiting for response...",
-            Style::default().fg(Color::DarkGray),
+            " Processing... (Esc x2 to abort) ",
+            Style::default()
+                .fg(Color::Rgb(70, 130, 180))
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled(
@@ -450,11 +483,8 @@ fn render_input(f: &mut Frame, app: &App, area: Rect) {
         )
     };
 
-    let border_style = if app.is_processing {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::Rgb(70, 130, 180))
-    };
+    // Always keep steel blue border
+    let border_style = Style::default().fg(Color::Rgb(70, 130, 180));
 
     let input = Paragraph::new(input_lines)
         .style(Style::default().fg(Color::White))
@@ -481,11 +511,7 @@ fn render_inline_approval<'a>(
             // Full interactive approval display
             lines.push(Line::from(vec![
                 Span::styled(
-                    "  \u{1f512} ",
-                    Style::default().fg(Color::Rgb(184, 134, 11)),
-                ),
-                Span::styled(
-                    "Tool Permission Required",
+                    "  TOOL APPROVAL REQUIRED",
                     Style::default()
                         .fg(Color::Red)
                         .add_modifier(Modifier::BOLD),
@@ -522,7 +548,7 @@ fn render_inline_approval<'a>(
                 )]));
                 for cap in &approval.capabilities {
                     lines.push(Line::from(vec![
-                        Span::styled("     \u{2022} ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("     - ", Style::default().fg(Color::DarkGray)),
                         Span::styled(cap.clone(), Style::default().fg(Color::Red)),
                     ]));
                 }
@@ -587,48 +613,56 @@ fn render_inline_approval<'a>(
             }
 
             // Option descriptions for the selected item
-            let option_labels = [
-                ("Allow once", "Approve this single tool call"),
-                (
-                    "Allow all for this task",
-                    "Auto-approve all tools this session",
-                ),
-                (
-                    "Allow all moving forward",
-                    "Auto-approve all tools permanently",
-                ),
+            // Option colors: green for safe, yellow for session, red for yolo
+            let option_data = [
+                ("1. Allow once", "Approve this single tool call", Color::Green),
+                ("2. Allow all (session)", "Auto-approve all tools this session", Color::Yellow),
+                ("3. Yolo mode", "Auto-approve everything permanently", Color::Red),
             ];
 
+            lines.push(Line::from(""));
             lines.push(Line::from(vec![Span::styled(
-                "  Select an option:",
+                "  SELECT APPROVAL POLICY:",
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             )]));
+            lines.push(Line::from(""));
 
-            for (i, (label, desc)) in option_labels.iter().enumerate() {
+            for (i, (label, desc, color)) in option_data.iter().enumerate() {
                 let is_selected = i == approval.selected_option;
-                let prefix = if is_selected { "\u{25b6} " } else { "  " };
-                let style = if is_selected {
-                    Style::default()
-                        .fg(Color::Rgb(70, 130, 180))
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {}", prefix), style),
-                    Span::styled(label.to_string(), style),
-                ]));
 
                 if is_selected {
-                    lines.push(Line::from(vec![Span::styled(
-                        format!("      {}", desc),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    )]));
+                    // Selected: highlighted background
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("  >> {} ", label),
+                            Style::default()
+                                .fg(Color::Black)
+                                .bg(*color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!(" {}", desc),
+                            Style::default()
+                                .fg(*color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                } else {
+                    // Unselected: colored text, always visible
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("     {} ", label),
+                            Style::default()
+                                .fg(*color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!(" {}", desc),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
                 }
             }
 
@@ -646,7 +680,7 @@ fn render_inline_approval<'a>(
                 Span::styled(
                     "[Enter]",
                     Style::default()
-                        .fg(Color::Blue)
+                        .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" Confirm  ", Style::default().fg(Color::White)),
@@ -664,22 +698,21 @@ fn render_inline_approval<'a>(
                 Span::styled(" Details", Style::default().fg(Color::White)),
             ]));
 
-            // Timer
-            let time_remaining = approval.requested_at.elapsed();
-            let timeout = std::time::Duration::from_secs(300);
-            let remaining = timeout.saturating_sub(time_remaining);
-            let secs = remaining.as_secs();
-            let time_color = if secs < 60 {
-                Color::Red
-            } else if secs < 180 {
-                Color::Rgb(184, 134, 11)
-            } else {
-                Color::DarkGray
-            };
-            lines.push(Line::from(vec![Span::styled(
-                format!("  {}m {}s remaining", secs / 60, secs % 60),
-                Style::default().fg(time_color),
-            )]));
+            // Waiting indicator
+            let elapsed = approval.requested_at.elapsed().as_secs();
+            if elapsed > 0 {
+                let mins = elapsed / 60;
+                let secs = elapsed % 60;
+                let wait_text = if mins > 0 {
+                    format!("  Waiting {}m {}s", mins, secs)
+                } else {
+                    format!("  Waiting {}s", secs)
+                };
+                lines.push(Line::from(vec![Span::styled(
+                    wait_text,
+                    Style::default().fg(Color::DarkGray),
+                )]));
+            }
 
             // Separator
             let sep_len = content_width.min(58);
@@ -689,21 +722,14 @@ fn render_inline_approval<'a>(
             )));
         }
         ApprovalState::Approved(option) => {
-            // Compact resolved line
             let option_text = match option {
-                ApprovalOption::AllowOnce => "Allow once",
-                ApprovalOption::AllowForSession => "Allow all for this task",
-                ApprovalOption::AllowAlways => "Allow all moving forward",
+                ApprovalOption::AllowOnce => "allow once",
+                ApprovalOption::AllowForSession => "allow all (session)",
+                ApprovalOption::AllowAlways => "yolo",
             };
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  \u{1f512} {} \u{2014} ", approval.tool_name),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-                Span::styled(
-                    format!("\u{2713} Approved ({})", option_text),
+                    format!("  {} -- approved ({})", approval.tool_name, option_text),
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::ITALIC),
@@ -711,7 +737,6 @@ fn render_inline_approval<'a>(
             ]));
         }
         ApprovalState::Denied(reason) => {
-            // Compact denied line
             let suffix = if reason.is_empty() {
                 String::new()
             } else {
@@ -719,16 +744,91 @@ fn render_inline_approval<'a>(
             };
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  \u{1f512} {} \u{2014} ", approval.tool_name),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-                Span::styled(
-                    format!("\u{2717} Denied{}", suffix),
+                    format!("  {} -- denied{}", approval.tool_name, suffix),
                     Style::default()
                         .fg(Color::Red)
                         .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+    }
+}
+
+/// Render the /approve policy selector menu
+fn render_approve_menu<'a>(
+    lines: &mut Vec<Line<'a>>,
+    menu: &super::app::ApproveMenu,
+    _content_width: usize,
+) {
+    use super::app::ApproveMenuState;
+
+    match &menu.state {
+        ApproveMenuState::Pending => {
+            let gold = Color::Rgb(255, 200, 50);
+
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  TOOL APPROVAL POLICY",
+                    Style::default().fg(gold).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            lines.push(Line::from(""));
+
+            let options = [
+                ("Approve-only", "Always ask before executing tools"),
+                ("Allow all (session)", "Auto-approve all tools for this session"),
+                ("Yolo mode", "Execute everything without approval until reset"),
+            ];
+
+            lines.push(Line::from(Span::styled(
+                "  Select a policy:",
+                Style::default().fg(Color::Gray),
+            )));
+            lines.push(Line::from(""));
+
+            for (i, (label, desc)) in options.iter().enumerate() {
+                let is_selected = i == menu.selected_option;
+                let prefix = if is_selected { "\u{25b6} " } else { "  " };
+
+                let style = if is_selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{}{}", prefix, label), style),
+                ]));
+
+                if is_selected {
+                    lines.push(Line::from(vec![
+                        Span::raw("      "),
+                        Span::styled(
+                            *desc,
+                            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [\u{2191}\u{2193}] Navigate  [Enter] Confirm  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        ApproveMenuState::Selected(choice) => {
+            let (label, color) = match choice {
+                0 => ("Approve-only", Color::Green),
+                1 => ("Allow all (session)", Color::Yellow),
+                2 => ("Yolo mode", Color::Red),
+                _ => ("Cancelled", Color::DarkGray),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  Policy set: {}", label),
+                    Style::default().fg(color).add_modifier(Modifier::ITALIC),
                 ),
             ]));
         }
@@ -947,7 +1047,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
         kv("/usage", "Token & cost stats", blue),
         kv("/onboard", "Setup wizard", blue),
         kv("/sessions", "Session manager", blue),
-        kv("/approve", "Reset approval policy", blue),
+        kv("/approve", "Tool approval policy", blue),
         Line::from(""),
         Line::from(""),
         Line::from(vec![

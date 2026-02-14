@@ -715,13 +715,30 @@ async fn cmd_chat(config: &crate::config::Config, _session_id: Option<String>, f
         })
     });
 
-    // Create agent service with approval callback
-    tracing::debug!("Creating agent service with approval callback");
+    // Create progress callback that sends tool events to TUI
+    let progress_sender = app.event_sender();
+    let progress_callback: crate::llm::agent::ProgressCallback = Arc::new(move |event| {
+        use crate::llm::agent::ProgressEvent;
+        use crate::tui::events::TuiEvent;
+        match event {
+            ProgressEvent::ToolStarted { tool_name, tool_input } => {
+                let _ = progress_sender.send(TuiEvent::ToolCallStarted { tool_name, tool_input });
+            }
+            ProgressEvent::ToolCompleted { tool_name, tool_input, success, summary } => {
+                let _ = progress_sender.send(TuiEvent::ToolCallCompleted { tool_name, tool_input, success, summary });
+            }
+            ProgressEvent::Thinking => {} // spinner handles this already
+        }
+    });
+
+    // Create agent service with approval callback and progress callback
+    tracing::debug!("Creating agent service with approval and progress callbacks");
     let agent_service = Arc::new(
         AgentService::new(provider.clone(), service_context.clone())
             .with_system_brain(system_brain)
             .with_tool_registry(Arc::new(tool_registry))
             .with_approval_callback(Some(approval_callback))
+            .with_progress_callback(Some(progress_callback))
             .with_max_tool_iterations(20)
             .with_working_directory(working_directory),
     );

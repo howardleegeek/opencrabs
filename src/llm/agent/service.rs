@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// Tool approval request information
@@ -34,6 +35,17 @@ pub struct ToolApprovalInfo {
 pub type ApprovalCallback = Arc<
     dyn Fn(ToolApprovalInfo) -> Pin<Box<dyn Future<Output = Result<bool>> + Send>> + Send + Sync,
 >;
+
+/// Progress event emitted during tool execution
+#[derive(Debug, Clone)]
+pub enum ProgressEvent {
+    Thinking,
+    ToolStarted { tool_name: String, tool_input: Value },
+    ToolCompleted { tool_name: String, tool_input: Value, success: bool, summary: String },
+}
+
+/// Callback for reporting progress during agent execution
+pub type ProgressCallback = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
 
 /// Agent Service for managing AI conversations
 pub struct AgentService {
@@ -58,6 +70,9 @@ pub struct AgentService {
     /// Callback for requesting tool approval from user
     approval_callback: Option<ApprovalCallback>,
 
+    /// Callback for reporting progress during tool execution
+    progress_callback: Option<ProgressCallback>,
+
     /// Working directory for tool execution
     working_directory: std::path::PathBuf,
 }
@@ -73,6 +88,7 @@ impl AgentService {
             default_system_brain: None,
             auto_approve_tools: false,
             approval_callback: None,
+            progress_callback: None,
             working_directory: std::env::current_dir().unwrap_or_default(),
         }
     }
@@ -104,6 +120,12 @@ impl AgentService {
     /// Set the approval callback for interactive tool approval
     pub fn with_approval_callback(mut self, callback: Option<ApprovalCallback>) -> Self {
         self.approval_callback = callback;
+        self
+    }
+
+    /// Set the progress callback for reporting tool execution progress
+    pub fn with_progress_callback(mut self, callback: Option<ProgressCallback>) -> Self {
+        self.progress_callback = callback;
         self
     }
 
@@ -243,7 +265,7 @@ impl AgentService {
         user_message: String,
         model: Option<String>,
     ) -> Result<AgentResponse> {
-        self.send_message_with_tools_and_mode(session_id, user_message, model, false)
+        self.send_message_with_tools_and_mode(session_id, user_message, model, false, None)
             .await
     }
 
@@ -254,6 +276,7 @@ impl AgentService {
         user_message: String,
         model: Option<String>,
         read_only_mode: bool,
+        cancel_token: Option<CancellationToken>,
     ) -> Result<AgentResponse> {
         // Get or create session
         let session_service = SessionService::new(self.context.clone());
@@ -305,7 +328,19 @@ impl AgentService {
         let mut recent_tool_calls: Vec<String> = Vec::new(); // Track tool calls to detect loops
 
         while iteration < self.max_tool_iterations {
+            // Check for cancellation
+            if let Some(ref token) = cancel_token {
+                if token.is_cancelled() {
+                    break;
+                }
+            }
+
             iteration += 1;
+
+            // Emit thinking progress
+            if let Some(ref cb) = self.progress_callback {
+                cb(ProgressEvent::Thinking);
+            }
 
             // Build LLM request with tools if available
             let mut request =
@@ -534,12 +569,30 @@ impl AgentService {
             let mut tool_results = Vec::new();
 
             for (tool_id, tool_name, tool_input) in tool_uses {
+                // Check for cancellation before each tool
+                if let Some(ref token) = cancel_token {
+                    if token.is_cancelled() {
+                        break;
+                    }
+                }
+
                 tracing::info!(
                     "Executing tool '{}' (iteration {}/{})",
                     tool_name,
                     iteration,
                     self.max_tool_iterations
                 );
+
+                // Save tool input for progress reporting (before it's moved to execute)
+                let tool_input_for_progress = tool_input.clone();
+
+                // Emit tool started progress
+                if let Some(ref cb) = self.progress_callback {
+                    cb(ProgressEvent::ToolStarted {
+                        tool_name: tool_name.clone(),
+                        tool_input: tool_input_for_progress.clone(),
+                    });
+                }
 
                 // Check if approval is needed
                 let needs_approval = if let Some(tool) = self.tool_registry.get(&tool_name) {
@@ -607,22 +660,41 @@ impl AgentService {
                                     .await
                                 {
                                     Ok(result) => {
+                                        let success = result.success;
+                                        let content = if result.success {
+                                            result.output
+                                        } else {
+                                            result.error.unwrap_or_else(|| {
+                                                "Tool execution failed".to_string()
+                                            })
+                                        };
+                                        if let Some(ref cb) = self.progress_callback {
+                                            cb(ProgressEvent::ToolCompleted {
+                                                tool_name: tool_name.clone(),
+                                                tool_input: tool_input_for_progress.clone(),
+                                                success,
+                                                summary: content.chars().take(100).collect(),
+                                            });
+                                        }
                                         tool_results.push(ContentBlock::ToolResult {
                                             tool_use_id: tool_id,
-                                            content: if result.success {
-                                                result.output
-                                            } else {
-                                                result.error.unwrap_or_else(|| {
-                                                    "Tool execution failed".to_string()
-                                                })
-                                            },
-                                            is_error: Some(!result.success),
+                                            content,
+                                            is_error: Some(!success),
                                         });
                                     }
                                     Err(e) => {
+                                        let err_msg = format!("Tool execution error: {}", e);
+                                        if let Some(ref cb) = self.progress_callback {
+                                            cb(ProgressEvent::ToolCompleted {
+                                                tool_name: tool_name.clone(),
+                                                tool_input: tool_input_for_progress.clone(),
+                                                success: false,
+                                                summary: err_msg.chars().take(100).collect(),
+                                            });
+                                        }
                                         tool_results.push(ContentBlock::ToolResult {
                                             tool_use_id: tool_id,
-                                            content: format!("Tool execution error: {}", e),
+                                            content: err_msg,
                                             is_error: Some(true),
                                         });
                                     }
@@ -662,22 +734,41 @@ impl AgentService {
                     .await
                 {
                     Ok(result) => {
+                        let success = result.success;
+                        let content = if result.success {
+                            result.output
+                        } else {
+                            result
+                                .error
+                                .unwrap_or_else(|| "Tool execution failed".to_string())
+                        };
+                        if let Some(ref cb) = self.progress_callback {
+                            cb(ProgressEvent::ToolCompleted {
+                                tool_name: tool_name.clone(),
+                                tool_input: tool_input_for_progress.clone(),
+                                success,
+                                summary: content.chars().take(100).collect(),
+                            });
+                        }
                         tool_results.push(ContentBlock::ToolResult {
                             tool_use_id: tool_id,
-                            content: if result.success {
-                                result.output
-                            } else {
-                                result
-                                    .error
-                                    .unwrap_or_else(|| "Tool execution failed".to_string())
-                            },
-                            is_error: Some(!result.success),
+                            content,
+                            is_error: Some(!success),
                         });
                     }
                     Err(e) => {
+                        let err_msg = format!("Tool execution error: {}", e);
+                        if let Some(ref cb) = self.progress_callback {
+                            cb(ProgressEvent::ToolCompleted {
+                                tool_name: tool_name.clone(),
+                                tool_input: tool_input_for_progress.clone(),
+                                success: false,
+                                summary: err_msg.chars().take(100).collect(),
+                            });
+                        }
                         tool_results.push(ContentBlock::ToolResult {
                             tool_use_id: tool_id,
-                            content: format!("Tool execution error: {}", e),
+                            content: err_msg,
                             is_error: Some(true),
                         });
                     }

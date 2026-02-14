@@ -21,6 +21,10 @@ struct BashInput {
     /// Optional working directory (overrides context)
     #[serde(skip_serializing_if = "Option::is_none")]
     working_dir: Option<String>,
+
+    /// Optional timeout in seconds (overrides context default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_secs: Option<u64>,
 }
 
 /// Check if a bash command is safe for read-only mode (Plan mode)
@@ -156,6 +160,10 @@ impl Tool for BashTool {
                 "working_dir": {
                     "type": "string",
                     "description": "Optional: Working directory for command execution"
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "Optional: Timeout in seconds (default 120, max 600). Use higher values for builds."
                 }
             },
             "required": ["command"]
@@ -222,6 +230,11 @@ impl Tool for BashTool {
             ("sh", "-c")
         };
 
+        // Determine timeout: use input override if provided, else context default, cap at 600s
+        let effective_timeout = input.timeout_secs
+            .unwrap_or(context.timeout_secs)
+            .min(600);
+
         // Execute command with timeout
         let command_future = Command::new(shell)
             .arg(shell_arg)
@@ -229,7 +242,7 @@ impl Tool for BashTool {
             .current_dir(&working_dir)
             .output();
 
-        let output = match timeout(Duration::from_secs(context.timeout_secs), command_future).await
+        let output = match timeout(Duration::from_secs(effective_timeout), command_future).await
         {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
@@ -239,7 +252,7 @@ impl Tool for BashTool {
                 )));
             }
             Err(_) => {
-                return Err(ToolError::Timeout(context.timeout_secs));
+                return Err(ToolError::Timeout(effective_timeout));
             }
         };
 

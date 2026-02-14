@@ -505,7 +505,7 @@ See [Plan Mode User Guide](src/docs/PLAN_MODE_USER_GUIDE.md) for full documentat
 | `/usage` | Token/cost stats |
 | `/onboard` | Run setup wizard |
 | `/sessions` | Open session manager |
-| `/approve` | Reset tool approval policy to always-ask |
+| `/approve` | Tool approval policy selector (approve-only / session / yolo) |
 
 ### Sessions Mode
 
@@ -536,7 +536,13 @@ When the AI requests a tool that needs permission, an inline approval prompt app
 | **Allow all for this task** | Auto-approve all tools this session (resets on session switch) |
 | **Allow all moving forward** | Auto-approve all tools permanently (app lifetime) |
 
-Use `/approve` to reset back to always-ask.
+Use `/approve` to change your approval policy at any time:
+
+| Policy | Description |
+|--------|-------------|
+| **Approve-only** | Always ask before executing tools (default) |
+| **Allow all (session)** | Auto-approve all tools for the current session |
+| **Yolo mode** | Execute everything without approval until reset |
 
 ### Plan Mode
 

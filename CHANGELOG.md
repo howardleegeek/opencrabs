@@ -5,6 +5,26 @@ All notable changes to OpenCrab will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-02-14
+
+### Added
+- **Inline Tool Progress** -- Tool executions now show inline in chat with human-readable descriptions (e.g. "Read src/main.rs", "bash: cargo check", "Edited src/app.rs") instead of invisible spinner
+- **Expand/Collapse Tool Details** -- Press Ctrl+O to expand or collapse tool output details on completion messages, inspired by Claude Code's UX
+- **Abort Processing** -- Press Escape twice within 3 seconds to cancel an in-progress agent request via CancellationToken
+- **Active Input During Processing** -- Input box stays active with cursor visible while agent is processing; border remains steel blue
+- **Processing Guard** -- Prevents sending a second message while one is already processing; shows "Please wait or press Esc x2 to abort"
+- **Progress Callback System** -- New `ProgressCallback` / `ProgressEvent` architecture emitting `Thinking`, `ToolStarted`, and `ToolCompleted` events from agent service to TUI
+- **LLM-Controlled Bash Timeout** -- Bash tool now accepts `timeout_secs` from the LLM (capped at 600s), default raised from 30s to 120s
+
+### Changed
+- **Silent Auto-Approved Tools** -- Auto-approved tool calls no longer spam the chat; only completion descriptions shown
+- **Approval Never Times Out** -- Tool approval requests wait indefinitely until the user acts (no more 5-minute timeout)
+- **Approval UI De-Emojified** -- All emojis removed from approval rendering; clean text-only UI
+- **Yolo Mode Always Visible** -- All three approval tiers (Allow once, Allow all session, Yolo mode) always visible with color-coding (green/yellow/red) in inline approval
+
+### Fixed
+- **Race Condition on Double Send** -- Added `is_processing` guard in `send_message()` preventing overlapping agent requests
+
 ## [0.1.3] - 2026-02-14
 
 ### Added
@@ -25,7 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Overlay Approval Dialog** — Replaced by inline approval in chat
 - **Bottom Status Bar** — Removed entirely for more screen space
 
-[0.1.3]: https://github.com/adolfousier/opencrab/releases/tag/v0.1.3
+[0.1.4]: https://github.com/adolfousier/opencrabs/releases/tag/v0.1.4
+[0.1.3]: https://github.com/adolfousier/opencrabs/releases/tag/v0.1.3
 
 ## [0.1.2] - 2026-02-14
 

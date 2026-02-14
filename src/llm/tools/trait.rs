@@ -36,7 +36,7 @@ impl ToolExecutionContext {
             working_directory: std::env::current_dir().unwrap_or_default(),
             env_vars: HashMap::new(),
             auto_approve: false,
-            timeout_secs: 30,
+            timeout_secs: 120,
             read_only_mode: false,
         }
     }
