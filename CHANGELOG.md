@@ -5,6 +5,22 @@ All notable changes to OpenCrab will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-15
+
+### Added
+- **3-Tier Memory System** -- OpenCrabs now has a layered memory architecture: (1) **Brain MEMORY.md** -- user-curated durable memory loaded into system brain every turn, (2) **Daily Memory Logs** -- auto-compaction summaries saved to `~/.opencrabs/memory/YYYY-MM-DD.md` with multiple compactions per day stacking in the same file, (3) **Memory Search** -- `memory_search` tool backed by QMD for semantic search across all past daily logs
+- **Memory Search Tool** -- New `memory_search` agent tool searches past conversation logs via QMD (`qmd query --json`); gracefully degrades if QMD is not installed, returning a hint to use `read_file` on daily logs directly
+- **Compaction Summary Display** -- Auto-compaction at 80% context now shows the full summary in chat as a system message instead of running silently; users see exactly what the agent remembered
+- **Scroll While Streaming** -- Users can scroll up during streaming without being yanked back to the bottom; `auto_scroll` flag disables on user scroll, re-enables when scrolled back to bottom or on message send
+- **QMD Auto-Index** -- After each compaction, `qmd update` is triggered in the background to keep the memory search index current
+- **Memory Module** -- New `src/memory/mod.rs` module with QMD wrapper: availability check, collection management, search, and background re-indexing
+- **Path Consolidation** -- All data now lives under `~/.opencrabs/` (config, database, brain, memory, history, logs)
+- **Context Budget Awareness** -- Tool definition overhead (~500 tokens per tool) now factored into context usage calculation, preventing "prompt too long" errors
+
+### Changed
+- **Compaction Target** -- Compaction summaries now write to daily logs (`~/.opencrabs/memory/YYYY-MM-DD.md`) instead of appending to brain workspace `MEMORY.md`; brain `MEMORY.md` remains user-curated and untouched by auto-compaction
+- **Local Timestamps** -- Daily memory logs use `chrono::Local` instead of UTC for human-readable timestamps
+
 ## [0.1.9] - 2026-02-15
 
 ### Added
@@ -142,6 +158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Overlay Approval Dialog** — Replaced by inline approval in chat
 - **Bottom Status Bar** — Removed entirely for more screen space
 
+[0.2.0]: https://github.com/adolfousier/opencrabs/releases/tag/v0.2.0
 [0.1.9]: https://github.com/adolfousier/opencrabs/releases/tag/v0.1.9
 [0.1.8]: https://github.com/adolfousier/opencrabs/releases/tag/v0.1.8
 [0.1.7]: https://github.com/adolfousier/opencrabs/releases/tag/v0.1.7

@@ -1062,6 +1062,13 @@ fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled("Select  ", Style::default().fg(Color::White)),
         Span::styled(
+            "[N] ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("New  ", Style::default().fg(Color::White)),
+        Span::styled(
             "[R] ",
             Style::default()
                 .fg(Color::Rgb(184, 134, 11))
@@ -1270,6 +1277,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
         section_header("SESSIONS"),
         kv("↑ / ↓", "Navigate", mag),
         kv("Enter", "Load session", mag),
+        kv("N", "New session", mag),
         kv("R", "Rename", mag),
         kv("D", "Delete", mag),
         kv("Esc", "Back to chat", mag),

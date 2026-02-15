@@ -73,6 +73,9 @@ pub enum TuiEvent {
 
     /// Intermediate text the agent sent between tool call batches
     IntermediateText(String),
+
+    /// Context was auto-compacted — show the summary to the user
+    CompactionSummary(String),
 }
 
 /// Tool approval request details

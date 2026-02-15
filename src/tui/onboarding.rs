@@ -312,7 +312,7 @@ impl OnboardingWizard {
     pub fn new() -> Self {
         let default_workspace = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("~"))
-            .join("opencrabs")
+            .join(".opencrabs")
             .join("brain")
             .join("workspace");
 
@@ -573,9 +573,7 @@ impl OnboardingWizard {
         };
 
         // Check 2: Config path writable
-        let config_path = dirs::config_dir()
-            .map(|d| d.join("opencrabs").join("config.toml"))
-            .unwrap_or_else(|| PathBuf::from("~/.config/opencrabs/config.toml"));
+        let config_path = crate::config::opencrabs_home().join("config.toml");
         self.health_results[1].1 = if let Some(parent) = config_path.parent() {
             if parent.exists() || std::fs::create_dir_all(parent).is_ok() {
                 HealthStatus::Pass
@@ -1365,11 +1363,8 @@ Respond with EXACTLY six sections using these delimiters. No extra text before t
             groq_api_key: groq_key,
         };
 
-        // Write config.toml
-        let config_path = dirs::config_dir()
-            .ok_or_else(|| "Cannot determine config directory".to_string())?
-            .join("opencrabs")
-            .join("config.toml");
+        // Write config.toml to ~/.opencrabs/config.toml
+        let config_path = crate::config::opencrabs_home().join("config.toml");
 
         config
             .save(&config_path)
@@ -1449,9 +1444,13 @@ pub enum WizardAction {
 /// If any API key env var is set, the user has already configured auth — skip onboarding.
 /// To re-run the wizard, use `opencrabs onboard`, `--onboard` flag, or `/onboard`.
 pub fn is_first_time() -> bool {
-    let has_config = dirs::config_dir()
-        .map(|d| d.join("opencrabs").join("config.toml").exists())
-        .unwrap_or(false);
+    // Check primary path (~/.opencrabs/config.toml) and legacy XDG path
+    let has_config = crate::config::opencrabs_home()
+        .join("config.toml")
+        .exists()
+        || dirs::config_dir()
+            .map(|d| d.join("opencrabs").join("config.toml").exists())
+            .unwrap_or(false);
 
     if has_config {
         return false;

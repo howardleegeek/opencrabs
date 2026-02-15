@@ -1,6 +1,6 @@
 # OpenCrabs Configuration File
 # Copy this file to one of these locations:
-#   - Linux/macOS: ~/.config/opencrabs/config.toml or ~/opencrabs/config.toml
+#   - Linux/macOS: ~/.opencrabs/config.toml
 #   - Windows: %APPDATA%\opencrabs\config.toml or opencrabs\config.toml
 
 [database]

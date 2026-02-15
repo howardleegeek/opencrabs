@@ -274,10 +274,19 @@ impl Default for DatabaseConfig {
 }
 
 fn default_db_path() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("opencrabs")
-        .join("opencrabs.db")
+    opencrabs_home().join("opencrabs.db")
+}
+
+/// Canonical base directory: `~/.opencrabs/`
+///
+/// All OpenCrabs data lives here: config, database, history, brain workspace.
+pub fn opencrabs_home() -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let p = home.join(".opencrabs");
+    if !p.exists() {
+        let _ = std::fs::create_dir_all(&p);
+    }
+    p
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,7 +338,7 @@ impl Config {
     ///
     /// Priority (lowest to highest):
     /// 1. Default values
-    /// 2. System config: ~/.config/opencrabs/config.toml
+    /// 2. System config: ~/.opencrabs/config.toml
     /// 3. Local config: ./opencrabs.toml
     /// 4. Environment variables
     pub fn load() -> Result<Self> {
@@ -386,9 +395,20 @@ impl Config {
         Ok(config)
     }
 
-    /// Get the system config path: ~/.config/opencrabs/config.toml
-    fn system_config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|dir| dir.join("opencrabs").join("config.toml"))
+    /// Get the system config path: ~/.opencrabs/config.toml
+    ///
+    /// Falls back to legacy `~/.config/opencrabs/config.toml` for migration.
+    pub fn system_config_path() -> Option<PathBuf> {
+        let primary = Some(opencrabs_home().join("config.toml"));
+        // Check legacy XDG path for migration
+        let legacy = dirs::config_dir().map(|dir| dir.join("opencrabs").join("config.toml"));
+        if primary.as_ref().is_some_and(|p| p.exists()) {
+            return primary;
+        }
+        if legacy.as_ref().is_some_and(|p| p.exists()) {
+            return legacy;
+        }
+        primary
     }
 
     /// Get the local config path: ./opencrabs.toml

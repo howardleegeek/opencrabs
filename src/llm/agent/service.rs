@@ -48,6 +48,8 @@ pub enum ProgressEvent {
     /// Real-time streaming chunk from the LLM (word-by-word)
     StreamingChunk { text: String },
     Compacting,
+    /// Compaction finished — carry the summary so the TUI can display it
+    CompactionSummary { summary: String },
 }
 
 /// Callback for reporting progress during agent execution
@@ -323,15 +325,22 @@ impl AgentService {
             .map_err(|e| AgentError::Database(e.to_string()))?
             .ok_or(AgentError::SessionNotFound(session_id))?;
 
-        // Load conversation context
+        // Load conversation context with budget-aware message trimming
         let message_service = MessageService::new(self.context.clone());
-        let db_messages = message_service
+        let all_db_messages = message_service
             .list_messages_for_session(session_id)
             .await
             .map_err(|e| AgentError::Database(e.to_string()))?;
 
         let model_name = model.unwrap_or_else(|| self.provider.default_model().to_string());
         let context_window = self.provider.context_window(&model_name).unwrap_or(4096);
+
+        let db_messages = Self::trim_messages_to_budget(
+            all_db_messages,
+            context_window as usize,
+            self.tool_registry.count(),
+            self.default_system_brain.as_deref(),
+        );
 
         let mut context =
             AgentContext::from_db_messages(session_id, db_messages, context_window as usize);
@@ -876,10 +885,14 @@ impl AgentService {
                 tool_descriptions.clear();
             }
 
-            // Add assistant message with tool use to context
+            // Add assistant message with tool use to context (filter empty text blocks)
+            let clean_content: Vec<ContentBlock> = response.content.iter()
+                .filter(|b| !matches!(b, ContentBlock::Text { text } if text.is_empty()))
+                .cloned()
+                .collect();
             let assistant_msg = Message {
                 role: crate::llm::provider::Role::Assistant,
-                content: response.content.clone(),
+                content: clean_content,
             };
             context.add_message(assistant_msg);
 
@@ -973,15 +986,22 @@ impl AgentService {
             .map_err(|e| AgentError::Database(e.to_string()))?
             .ok_or(AgentError::SessionNotFound(session_id))?;
 
-        // Load conversation context
+        // Load conversation context with budget-aware message trimming
         let message_service = MessageService::new(self.context.clone());
-        let db_messages = message_service
+        let all_db_messages = message_service
             .list_messages_for_session(session_id)
             .await
             .map_err(|e| AgentError::Database(e.to_string()))?;
 
         let model_name = model.unwrap_or_else(|| self.provider.default_model().to_string());
         let context_window = self.provider.context_window(&model_name).unwrap_or(4096);
+
+        let db_messages = Self::trim_messages_to_budget(
+            all_db_messages,
+            context_window as usize,
+            self.tool_registry.count(),
+            self.default_system_brain.as_deref(),
+        );
 
         let mut context =
             AgentContext::from_db_messages(session_id, db_messages, context_window as usize);
@@ -1117,7 +1137,12 @@ impl AgentService {
         }
 
         // Build final content blocks from accumulated state
-        let content_blocks: Vec<ContentBlock> = block_states.into_iter().map(|s| s.block).collect();
+        // Filter out empty text blocks — Anthropic rejects "text content blocks must be non-empty"
+        let content_blocks: Vec<ContentBlock> = block_states
+            .into_iter()
+            .map(|s| s.block)
+            .filter(|b| !matches!(b, ContentBlock::Text { text } if text.is_empty()))
+            .collect();
 
         Ok(LLMResponse {
             id,
@@ -1126,6 +1151,50 @@ impl AgentService {
             stop_reason,
             usage: TokenUsage { input_tokens, output_tokens },
         })
+    }
+
+    /// Trim DB messages to fit within the context budget.
+    ///
+    /// Keeps only the most recent messages that fit within ~70% of the context window
+    /// after reserving space for tool definitions, brain, and response.
+    fn trim_messages_to_budget(
+        all_messages: Vec<crate::db::models::Message>,
+        context_window: usize,
+        tool_count: usize,
+        brain: Option<&str>,
+    ) -> Vec<crate::db::models::Message> {
+        let tool_budget = tool_count * 500;
+        let brain_budget = brain.map(|b| b.len() / 3).unwrap_or(0);
+        let history_budget = context_window
+            .saturating_sub(tool_budget)
+            .saturating_sub(brain_budget)
+            .saturating_sub(16384) // reserve for response
+            * 70 / 100;
+
+        let mut token_acc = 0usize;
+        let mut keep_from = 0usize;
+        for (i, msg) in all_messages.iter().enumerate().rev() {
+            if msg.content.is_empty() {
+                continue;
+            }
+            let msg_tokens = msg.content.len() / 3;
+            if token_acc + msg_tokens > history_budget {
+                keep_from = i + 1;
+                break;
+            }
+            token_acc += msg_tokens;
+        }
+
+        if keep_from > 0 {
+            let kept = all_messages.len() - keep_from;
+            tracing::info!(
+                "Context budget: keeping last {} of {} messages ({} est. tokens, budget {})",
+                kept, all_messages.len(), token_acc, history_budget
+            );
+            all_messages[keep_from..].to_vec()
+        } else {
+            all_messages
+        }
     }
 
     /// Auto-compact the context when usage is too high.
@@ -1194,10 +1263,13 @@ impl AgentService {
 
         let summary = Self::extract_text_from_response(&response);
 
-        // Save to MEMORY.md
+        // Save to daily memory log
         if let Err(e) = self.save_to_memory(&summary).await {
-            tracing::warn!("Failed to save compaction summary to MEMORY.md: {}", e);
+            tracing::warn!("Failed to save compaction summary to daily log: {}", e);
         }
+
+        // Trigger background re-index so memory_search picks up the new log
+        crate::memory::reindex_background();
 
         // Compact the context: keep last 4 message pairs (8 messages)
         context.compact_with_summary(summary.clone(), 8);
@@ -1208,29 +1280,31 @@ impl AgentService {
             context.token_count
         );
 
+        // Show the summary to the user in chat
+        if let Some(ref cb) = self.progress_callback {
+            cb(ProgressEvent::CompactionSummary { summary: summary.clone() });
+        }
+
         Ok(summary)
     }
 
-    /// Save a compaction summary to the brain workspace's MEMORY.md
+    /// Save a compaction summary to a daily memory log at `~/.opencrabs/memory/YYYY-MM-DD.md`.
+    ///
+    /// Multiple compactions per day append to the same file. The brain workspace's
+    /// `MEMORY.md` is left untouched — it stays as user-curated durable memory.
     async fn save_to_memory(&self, summary: &str) -> std::result::Result<(), String> {
-        let brain_path = self
-            .brain_path
-            .clone()
-            .unwrap_or_else(crate::brain::BrainLoader::resolve_path);
+        let memory_dir = crate::config::opencrabs_home().join("memory");
 
-        let memory_path = brain_path.join("MEMORY.md");
+        std::fs::create_dir_all(&memory_dir)
+            .map_err(|e| format!("Failed to create memory directory: {}", e))?;
 
-        // Ensure directory exists
-        if let Some(parent) = memory_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create brain directory: {}", e))?;
-        }
+        let date = chrono::Local::now().format("%Y-%m-%d");
+        let memory_path = memory_dir.join(format!("{}.md", date));
 
-        // Read existing content
+        // Read existing content (if any — multiple compactions per day stack)
         let existing = std::fs::read_to_string(&memory_path).unwrap_or_default();
 
-        // Append new section with timestamp
-        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
         let new_content = format!(
             "{}\n\n---\n\n## Auto-Compaction Summary ({})\n\n{}\n",
             existing.trim(),
@@ -1239,7 +1313,7 @@ impl AgentService {
         );
 
         std::fs::write(&memory_path, new_content.trim_start())
-            .map_err(|e| format!("Failed to write MEMORY.md: {}", e))?;
+            .map_err(|e| format!("Failed to write daily memory log: {}", e))?;
 
         tracing::info!("Saved compaction summary to {}", memory_path.display());
         Ok(())
@@ -1357,6 +1431,10 @@ impl AgentService {
             "task_manager" => {
                 let op = tool_input.get("operation").and_then(|v| v.as_str()).unwrap_or("?");
                 format!("Task: {}", op)
+            }
+            "memory_search" => {
+                let q = tool_input.get("query").and_then(|v| v.as_str()).unwrap_or("?");
+                format!("Memory: {}", q)
             }
             other => other.to_string(),
         }

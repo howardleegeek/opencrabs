@@ -1,5 +1,5 @@
 [![Rust Edition](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-FSL--1.1--MIT-blue.svg)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 [![CI](https://github.com/adolfousier/opencrabs/actions/workflows/ci.yml/badge.svg)](https://github.com/adolfousier/opencrabs/actions/workflows/ci.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/adolfousier/opencrabs?style=social)](https://github.com/adolfousier/opencrabs)
 
@@ -72,7 +72,8 @@
 | **Real-time Streaming** | Character-by-character response streaming with animated spinner showing model name and live text |
 | **Local LLM Support** | Run with LM Studio, Ollama, or any OpenAI-compatible endpoint — 100% private, zero-cost |
 | **Cost Tracking** | Per-message token count and cost displayed in header |
-| **Context Awareness** | Live context usage indicator with color-coded percentage (green/yellow/red); auto-compaction at 80% |
+| **Context Awareness** | Live context usage indicator with color-coded percentage (green/yellow/red); auto-compaction at 80% with tool overhead budgeting |
+| **3-Tier Memory** | (1) **Brain MEMORY.md** — user-curated durable memory loaded every turn, (2) **Daily Logs** — auto-compaction summaries at `~/.opencrabs/memory/YYYY-MM-DD.md`, (3) **Memory Search** — `memory_search` tool for semantic retrieval across all past logs via QMD |
 | **Dynamic Brain System** | System brain assembled from workspace MD files (SOUL, IDENTITY, USER, AGENTS, TOOLS, MEMORY) — all editable live between turns |
 
 ### Multimodal Input
@@ -96,10 +97,12 @@
 | Feature | Description |
 |---------|-------------|
 | **Cursor Navigation** | Full cursor movement: Left/Right arrows, Ctrl+Left/Right word jump, Home/End, Delete, Backspace at position |
-| **Input History** | Persistent command history (`~/.config/opencrabs/history.txt`), loaded on startup, capped at 500 entries |
+| **Input History** | Persistent command history (`~/.opencrabs/history.txt`), loaded on startup, capped at 500 entries |
 | **Inline Tool Approval** | Claude Code-style `❯ Yes / Always / No` selector with arrow key navigation |
 | **Inline Plan Approval** | Interactive plan review selector (Approve / Reject / Request Changes / View Plan) |
 | **Session Management** | Create, rename, delete sessions with persistent SQLite storage; token counts and context % per session |
+| **Scroll While Streaming** | Scroll up during streaming without being yanked back to bottom; auto-scroll re-enables when you scroll back down or send a message |
+| **Compaction Summary** | Auto-compaction shows the full summary in chat as a system message — see exactly what the agent remembered |
 | **Syntax Highlighting** | 100+ languages with line numbers via syntect |
 | **Markdown Rendering** | Rich text formatting with code blocks, headings, lists, and inline styles |
 | **Tool Context Persistence** | Tool call groups saved to DB and reconstructed on session reload — no vanishing tool history |
@@ -260,7 +263,7 @@ First-time users are guided through an 8-step setup wizard that appears automati
 |------|-------|-------------|
 | 1 | **Mode Selection** | QuickStart (sensible defaults) vs Advanced (full control) |
 | 2 | **Model & Auth** | Pick provider (Anthropic, OpenAI, Gemini, Qwen, Custom) → enter token/key → select model. Auto-detects existing keys from env/keyring |
-| 3 | **Workspace** | Set brain workspace path (default `~/opencrabs/brain/workspace/`) → seed template files (SOUL.md, IDENTITY.md, etc.) |
+| 3 | **Workspace** | Set brain workspace path (default `~/.opencrabs/brain/workspace/`) → seed template files (SOUL.md, IDENTITY.md, etc.) |
 | 4 | **Gateway** | Configure HTTP API gateway: port, bind address, auth mode |
 | 5 | **Channels** | Toggle messaging integrations (Telegram, Discord, WhatsApp, Signal, Google Chat, iMessage) |
 | 6 | **Daemon** | Install background service (systemd on Linux, LaunchAgent on macOS) |
@@ -382,12 +385,12 @@ See [LM_STUDIO_GUIDE.md](src/docs/guides/LM_STUDIO_GUIDE.md) for detailed setup 
 
 ## 📝 Configuration
 
-### Configuration File (`opencrabs.toml`)
+### Configuration File (`config.toml`)
 
 OpenCrabs searches for config in this order:
-1. `./opencrabs.toml` (current directory)
-2. `~/.config/opencrabs/opencrabs.toml` (Linux/macOS) or `%APPDATA%\opencrabs\opencrabs.toml` (Windows)
-3. `~/opencrabs.toml`
+1. `~/.opencrabs/config.toml` (primary)
+2. `~/.config/opencrabs/config.toml` (legacy fallback)
+3. `./opencrabs.toml` (current directory override)
 
 Environment variables override config file settings. `.env` files are auto-loaded.
 
@@ -459,6 +462,7 @@ OpenCrabs includes a built-in tool execution system. The AI can use these tools 
 | `parse_document` | Extract text from PDF, DOCX, HTML |
 | `task_manager` | Manage agent tasks |
 | `http_request` | Make HTTP requests |
+| `memory_search` | Search past conversation memory logs for context from previous sessions (QMD-backed, graceful skip if not installed) |
 | `session_context` | Access session information |
 | `plan` | Create structured execution plans |
 
@@ -635,13 +639,13 @@ opencrabs logs clean -d 3  # Clean logs older than 3 days
 
 ---
 
-## 🧠 Brain System (v0.1.1)
+## 🧠 Brain System & 3-Tier Memory (v0.2.0)
 
 OpenCrabs's brain is **dynamic and self-sustaining**. Instead of a hardcoded system prompt, the agent assembles its personality, knowledge, and behavior from workspace files that can be edited between turns.
 
 ### Brain Workspace
 
-The brain reads markdown files from `~/opencrabs/brain/workspace/` (or `OPENCRABS_BRAIN_PATH` env var):
+The brain reads markdown files from `~/.opencrabs/brain/workspace/` (or `OPENCRABS_BRAIN_PATH` env var):
 
 | File | Purpose |
 |------|---------|
@@ -650,13 +654,30 @@ The brain reads markdown files from `~/opencrabs/brain/workspace/` (or `OPENCRAB
 | `USER.md` | Who the human is, how to work with them |
 | `AGENTS.md` | Workspace rules, memory system, safety policies |
 | `TOOLS.md` | Environment-specific notes (SSH hosts, API accounts) |
-| `MEMORY.md` | Long-term context, troubleshooting notes, lessons learned |
+| `MEMORY.md` | Long-term context, troubleshooting notes, lessons learned (user-curated, never touched by auto-compaction) |
 
 Files are re-read **every turn** — edit them between messages and the agent immediately reflects the changes. Missing files are silently skipped; a hardcoded brain preamble is always present.
 
+### 3-Tier Memory Architecture
+
+| Tier | Location | Purpose | Managed By |
+|------|----------|---------|------------|
+| **1. Brain MEMORY.md** | `~/.opencrabs/brain/workspace/MEMORY.md` | Durable, curated knowledge loaded into system brain every turn | You (the user) |
+| **2. Daily Memory Logs** | `~/.opencrabs/memory/YYYY-MM-DD.md` | Auto-compaction summaries with structured breakdowns of each session | Auto (on compaction) |
+| **3. Memory Search** | `memory_search` tool via QMD | Semantic search across all daily logs — the agent can recall past decisions, files, errors | Agent (via tool call) |
+
+**How it works:**
+1. When context hits 80%, auto-compaction summarizes the conversation into a structured breakdown (current task, decisions, files modified, errors, next steps)
+2. The summary is saved to a daily log at `~/.opencrabs/memory/2026-02-15.md` (multiple compactions per day stack in the same file)
+3. The summary is shown to you in chat so you see exactly what was remembered
+4. If [QMD](https://github.com/qmd-project/qmd) is installed, the index is updated in the background so the agent can search past logs with `memory_search`
+5. Brain `MEMORY.md` is **never touched** by auto-compaction — it stays as your curated, always-loaded context
+
+**Without QMD:** Daily logs are still saved as plain markdown. The agent can read them directly with `read_file`. Memory search returns a helpful hint to install QMD.
+
 ### User-Defined Slash Commands
 
-Tell OpenCrabs in natural language: *"Create a /deploy command that runs deploy.sh"* — and it writes the command to `~/opencrabs/brain/commands.json`:
+Tell OpenCrabs in natural language: *"Create a /deploy command that runs deploy.sh"* — and it writes the command to `~/.opencrabs/brain/commands.json`:
 
 ```json
 [
@@ -759,10 +780,11 @@ opencrabs/
 │   │   └── crabrace.rs   # Provider registry integration
 │   ├── db/               # Database layer (SQLx + SQLite)
 │   ├── services/         # Business logic (Session, Message, File, Plan)
+│   ├── memory/           # Memory search code (QMD wrapper); data stored at ~/.opencrabs/memory/
 │   ├── llm/              # LLM integration
 │   │   ├── agent/        # Agent service + context management
 │   │   ├── provider/     # Provider implementations (Anthropic, OpenAI, Qwen)
-│   │   ├── tools/        # Tool system (read, write, bash, glob, grep, etc.)
+│   │   ├── tools/        # Tool system (read, write, bash, glob, grep, memory_search, etc.)
 │   │   └── prompt/       # Prompt engineering
 │   ├── tui/              # Terminal UI (Ratatui)
 │   │   ├── onboarding.rs     # 7-step onboarding wizard (state + logic)
@@ -902,12 +924,7 @@ cargo test
 
 ## 📄 License
 
-**FSL-1.1-MIT License**
-
-- **Functional Source License (FSL) 1.1** — First 2 years
-- **MIT License** — After 2 years from release
-
-See [LICENSE.md](LICENSE.md) for details.
+**MIT License** — See [LICENSE.md](LICENSE.md) for details.
 
 ---
 

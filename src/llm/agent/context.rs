@@ -76,6 +76,11 @@ impl AgentContext {
         let mut context = Self::new(session_id, max_tokens);
 
         for db_msg in db_messages {
+            // Skip messages with empty content — Anthropic rejects empty text blocks
+            if db_msg.content.is_empty() {
+                continue;
+            }
+
             let role = match db_msg.role.as_str() {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,

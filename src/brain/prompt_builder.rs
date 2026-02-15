@@ -98,12 +98,13 @@ impl BrainLoader {
         Self { workspace_path }
     }
 
-    /// Resolve the brain workspace path: `~/opencrabs/brain/workspace/`
+    /// Resolve the brain workspace path: `~/.opencrabs/brain/workspace/`
     ///
     /// Creates the directory if it doesn't exist.
     pub fn resolve_path() -> PathBuf {
-        let home = dirs::home_dir().expect("Cannot determine home directory");
-        let p = home.join("opencrabs").join("brain").join("workspace");
+        let p = crate::config::opencrabs_home()
+            .join("brain")
+            .join("workspace");
         if !p.exists() {
             let _ = std::fs::create_dir_all(&p);
         }

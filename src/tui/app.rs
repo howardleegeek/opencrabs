@@ -209,6 +209,9 @@ pub struct App {
     /// Images attached to the current input (auto-detected from pasted paths)
     pub attachments: Vec<ImageAttachment>,
     pub scroll_offset: usize,
+    /// When true, new streaming content auto-scrolls to bottom.
+    /// Set to false when user scrolls up; re-enabled when they scroll back to bottom or send a message.
+    pub auto_scroll: bool,
     pub selected_session_index: usize,
     pub should_quit: bool,
 
@@ -328,6 +331,7 @@ impl App {
             cursor_position: 0,
             attachments: Vec::new(),
             scroll_offset: 0,
+            auto_scroll: true,
             selected_session_index: 0,
             should_quit: false,
             is_processing: false,
@@ -450,9 +454,15 @@ impl App {
             TuiEvent::MouseScroll(direction) => {
                 if self.mode == AppMode::Chat {
                     if direction > 0 {
+                        // Scrolling up — disable auto-scroll
                         self.scroll_offset = self.scroll_offset.saturating_add(3);
+                        self.auto_scroll = false;
                     } else {
                         self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                        // Re-enable auto-scroll when back at bottom
+                        if self.scroll_offset == 0 {
+                            self.auto_scroll = true;
+                        }
                     }
                 }
             }
@@ -506,8 +516,10 @@ impl App {
                 self.handle_approval_requested(request);
             }
             TuiEvent::ToolApprovalResponse(_response) => {
-                // Response is sent via channel, just auto-scroll
-                self.scroll_offset = 0;
+                // Response is sent via channel, auto-scroll if enabled
+                if self.auto_scroll {
+                    self.scroll_offset = 0;
+                }
             }
             TuiEvent::ToolCallStarted { tool_name, tool_input } => {
                 // Show tool call in progress
@@ -521,7 +533,9 @@ impl App {
                         expanded: false,
                     });
                 }
-                self.scroll_offset = 0;
+                if self.auto_scroll {
+                    self.scroll_offset = 0;
+                }
             }
             TuiEvent::IntermediateText(text) => {
                 // Clear streaming response — text was already shown live via streaming chunks,
@@ -562,7 +576,9 @@ impl App {
                     tool_group: None,
                     plan_approval: None,
                 });
-                self.scroll_offset = 0;
+                if self.auto_scroll {
+                    self.scroll_offset = 0;
+                }
             }
             TuiEvent::ToolCallCompleted { tool_name, tool_input, success, summary } => {
                 let desc = Self::format_tool_description(&tool_name, &tool_input);
@@ -577,7 +593,26 @@ impl App {
                         expanded: false,
                     });
                 }
-                self.scroll_offset = 0;
+                if self.auto_scroll {
+                    self.scroll_offset = 0;
+                }
+            }
+            TuiEvent::CompactionSummary(summary) => {
+                // Show the compaction summary as a system message in chat
+                self.messages.push(DisplayMessage {
+                    id: Uuid::new_v4(),
+                    role: "system".to_string(),
+                    content: format!("**Context compacted.** Summary saved to daily memory log.\n\n{}", summary),
+                    timestamp: chrono::Utc::now(),
+                    token_count: None,
+                    cost: None,
+                    approval: None,
+                    approve_menu: None,
+                    details: None,
+                    expanded: false,
+                    tool_group: None,
+                    plan_approval: None,
+                });
             }
             TuiEvent::FocusGained | TuiEvent::FocusLost => {
                 // Handled by the event loop for tick coalescing
@@ -779,9 +814,9 @@ impl App {
         self.cursor_position = word_start;
     }
 
-    /// History file path: ~/.config/opencrabs/history.txt
+    /// History file path: ~/.opencrabs/history.txt
     fn history_path() -> Option<std::path::PathBuf> {
-        dirs::config_dir().map(|d| d.join("opencrabs").join("history.txt"))
+        Some(crate::config::opencrabs_home().join("history.txt"))
     }
 
     /// Load input history from disk (one entry per line, most recent last)
@@ -1331,8 +1366,12 @@ impl App {
             }
         } else if keys::is_page_up(&event) {
             self.scroll_offset = self.scroll_offset.saturating_add(10);
+            self.auto_scroll = false;
         } else if keys::is_page_down(&event) {
             self.scroll_offset = self.scroll_offset.saturating_sub(10);
+            if self.scroll_offset == 0 {
+                self.auto_scroll = true;
+            }
         } else if event.code == KeyCode::Backspace && event.modifiers.contains(KeyModifiers::ALT) {
             // Alt+Backspace — delete last word
             self.delete_last_word();
@@ -1506,6 +1545,10 @@ impl App {
                 self.session_renaming = true;
                 self.session_rename_buffer = session.title.clone().unwrap_or_default();
             }
+        } else if event.code == KeyCode::Char('n') || event.code == KeyCode::Char('N') {
+            // Create a new session and switch to it
+            self.create_new_session().await?;
+            self.switch_mode(AppMode::Chat).await?;
         } else if event.code == KeyCode::Char('d') || event.code == KeyCode::Char('D') {
             // Delete the selected session
             if let Some(session) = self.sessions.get(self.selected_session_index) {
@@ -1643,6 +1686,7 @@ impl App {
 
         self.current_session = Some(session.clone());
         self.messages.clear();
+        self.auto_scroll = true;
         self.scroll_offset = 0;
         self.mode = AppMode::Chat;
         self.approval_auto_session = false;
@@ -1672,6 +1716,7 @@ impl App {
 
         self.current_session = Some(session.clone());
         self.messages = messages.into_iter().flat_map(Self::expand_message).collect();
+        self.auto_scroll = true;
         self.scroll_offset = 0;
         self.approval_auto_session = false;
         self.approval_auto_always = false;
@@ -2210,7 +2255,8 @@ impl App {
             };
             self.messages.push(user_msg);
 
-            // Auto-scroll to show the new user message
+            // Auto-scroll to show the new user message and re-enable auto-scroll
+            self.auto_scroll = true;
             self.scroll_offset = 0;
 
             // Create cancellation token for this request
@@ -2261,8 +2307,10 @@ impl App {
             response.push_str(&chunk);
         } else {
             self.streaming_response = Some(chunk);
-            // Auto-scroll when response starts streaming
-            self.scroll_offset = 0;
+            // Auto-scroll when response starts streaming (only if user hasn't scrolled up)
+            if self.auto_scroll {
+                self.scroll_offset = 0;
+            }
         }
     }
 
@@ -2953,6 +3001,8 @@ impl App {
 
     /// Handle tool approval request — inline in chat
     fn handle_approval_requested(&mut self, request: ToolApprovalRequest) {
+        tracing::info!("[APPROVAL] handle_approval_requested called for tool='{}' auto_session={} auto_always={}",
+            request.tool_name, self.approval_auto_session, self.approval_auto_always);
         // Clear any stale pending approvals from previous requests
         for msg in &mut self.messages {
             if let Some(ref mut approval) = msg.approval && approval.state == ApprovalState::Pending {
@@ -3018,6 +3068,10 @@ impl App {
             plan_approval: None,
         });
         self.scroll_offset = 0;
+        tracing::info!("[APPROVAL] Pushed approval message for tool='{}', total messages={}, has_pending={}",
+            self.messages.last().map(|m| m.approval.as_ref().map(|a| a.tool_name.as_str()).unwrap_or("?")).unwrap_or("?"),
+            self.messages.len(),
+            self.has_pending_approval());
         // Stay in AppMode::Chat — no mode switch
     }
 

@@ -20,7 +20,8 @@ pub(crate) async fn cmd_chat(
                 bash::BashTool, brave_search::BraveSearchTool, code_exec::CodeExecTool,
                 context::ContextTool, doc_parser::DocParserTool, edit::EditTool,
                 exa_search::ExaSearchTool, glob::GlobTool, grep::GrepTool,
-                http::HttpClientTool, ls::LsTool, notebook::NotebookEditTool, plan_tool::PlanTool,
+                http::HttpClientTool, ls::LsTool, memory_search::MemorySearchTool,
+                notebook::NotebookEditTool, plan_tool::PlanTool,
                 read::ReadTool, registry::ToolRegistry, task::TaskTool, web_search::WebSearchTool,
                 write::WriteTool,
             },
@@ -66,6 +67,8 @@ pub(crate) async fn cmd_chat(
     tool_registry.register(Arc::new(ContextTool));
     tool_registry.register(Arc::new(HttpClientTool));
     tool_registry.register(Arc::new(PlanTool));
+    // Memory search (QMD-backed, graceful skip if not installed)
+    tool_registry.register(Arc::new(MemorySearchTool));
     // EXA search: always available (free via MCP), uses direct API if key is set
     let exa_key = std::env::var("EXA_API_KEY").ok();
     let exa_mode = if exa_key.is_some() { "direct API" } else { "MCP (free)" };
@@ -185,6 +188,9 @@ pub(crate) async fn cmd_chat(
             ProgressEvent::Thinking => {} // spinner handles this already
             ProgressEvent::Compacting => {
                 let _ = progress_sender.send(TuiEvent::AgentProcessing);
+            }
+            ProgressEvent::CompactionSummary { summary } => {
+                let _ = progress_sender.send(TuiEvent::CompactionSummary(summary));
             }
         }
     });
