@@ -4,6 +4,8 @@
 *.pdb
 Cargo.lock
 
+.opencrabs_*.json
+PLAN.md
 
 *.swp
 *.swo

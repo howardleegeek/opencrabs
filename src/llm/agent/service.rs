@@ -72,7 +72,7 @@ pub struct AgentService {
     /// Tool registry for executing tools
     tool_registry: Arc<ToolRegistry>,
 
-    /// Maximum tool execution iterations
+    /// Maximum tool execution iterations (0 = unlimited, relies on loop detection)
     max_tool_iterations: usize,
 
     /// System brain template
@@ -104,7 +104,7 @@ impl AgentService {
             provider,
             context,
             tool_registry: Arc::new(ToolRegistry::new()),
-            max_tool_iterations: 10,
+            max_tool_iterations: 0, // 0 = unlimited (loop detection is the safety net)
             default_system_brain: None,
             auto_approve_tools: false,
             approval_callback: None,
@@ -395,7 +395,16 @@ impl AgentService {
         let mut accumulated_text = String::new(); // Collect text from all iterations (not just final)
         let mut recent_tool_calls: Vec<String> = Vec::new(); // Track tool calls to detect loops
 
-        while iteration < self.max_tool_iterations {
+        loop {
+            // Safety: warn every 50 iterations but never hard-stop
+            // Loop detection (below) is the real safety net
+            if self.max_tool_iterations > 0 && iteration >= self.max_tool_iterations {
+                tracing::warn!(
+                    "Tool iteration {} exceeded configured max of {} — continuing (loop detection is active)",
+                    iteration,
+                    self.max_tool_iterations
+                );
+            }
             // Check for cancellation
             if let Some(ref token) = cancel_token
                 && token.is_cancelled() {
@@ -670,10 +679,9 @@ impl AgentService {
                     }
 
                 tracing::info!(
-                    "Executing tool '{}' (iteration {}/{})",
+                    "Executing tool '{}' (iteration {})",
                     tool_name,
                     iteration,
-                    self.max_tool_iterations
                 );
 
                 // Save tool input for progress reporting (before it's moved to execute)
@@ -917,10 +925,6 @@ impl AgentService {
                         .await;
                 }
 
-            // Check if we've hit max iterations
-            if iteration >= self.max_tool_iterations {
-                return Err(AgentError::MaxIterationsExceeded(self.max_tool_iterations));
-            }
         }
 
         let response = final_response.ok_or_else(|| {
@@ -1612,7 +1616,7 @@ mod tests {
     #[tokio::test]
     async fn test_agent_service_creation() {
         let (agent_service, _) = create_test_service().await;
-        assert_eq!(agent_service.max_tool_iterations, 10);
+        assert_eq!(agent_service.max_tool_iterations, 0); // 0 = unlimited
     }
 
     #[tokio::test]

@@ -114,7 +114,7 @@ pub(crate) async fn cmd_chat(
     let agent_service = Arc::new(
         AgentService::new(provider.clone(), service_context.clone())
             .with_system_brain(system_brain.clone())
-            .with_max_tool_iterations(20)
+
             .with_working_directory(working_directory.clone()),
     );
 
@@ -214,7 +214,7 @@ pub(crate) async fn cmd_chat(
             .with_approval_callback(Some(approval_callback))
             .with_progress_callback(Some(progress_callback))
             .with_message_queue_callback(Some(message_queue_callback))
-            .with_max_tool_iterations(20)
+
             .with_working_directory(working_directory.clone())
             .with_brain_path(brain_path),
     );
@@ -241,7 +241,7 @@ pub(crate) async fn cmd_chat(
                         .with_system_brain(shared_brain.clone())
                         .with_tool_registry(shared_tool_registry.clone())
                         .with_auto_approve_tools(true)
-                        .with_max_tool_iterations(20)
+            
                         .with_working_directory(working_directory.clone())
                         .with_brain_path(shared_brain_path.clone()),
                 );

@@ -299,7 +299,7 @@ pub(crate) async fn cmd_run(
     let agent_service = AgentService::new(provider.clone(), service_context.clone())
         .with_tool_registry(Arc::new(tool_registry))
         .with_system_brain(system_brain)
-        .with_max_tool_iterations(20);
+;
 
     // Create or get session
     let session_service = SessionService::new(service_context);
