@@ -42,6 +42,7 @@
 - [Project Structure](#-project-structure)
 - [Development](#-development)
 - [Platform Notes](#-platform-notes)
+- [Troubleshooting](#-troubleshooting)
 - [Disclaimers](#-disclaimers)
 - [Contributing](#-contributing)
 - [License](#-license)
@@ -906,6 +907,22 @@ sudo apt-get install build-essential pkg-config libssl-dev
 ```
 
 See [BUILD_NOTES.md](src/docs/guides/BUILD_NOTES.md) for detailed troubleshooting.
+
+---
+
+## 🔧 Troubleshooting
+
+### Agent Hallucinating Tool Calls
+
+If the agent starts sending tool call approvals that don't render in the UI — meaning it believes it executed actions that never actually ran — the session context has become corrupted.
+
+**Fix:** Start a new session.
+
+1. Press `/` and type `sessions` (or navigate to the Sessions panel)
+2. Press **N** to create a new session
+3. Continue your work in the fresh session
+
+This reliably resolves the issue. A fix is coming in a future release.
 
 ---
 

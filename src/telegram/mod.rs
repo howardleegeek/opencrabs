@@ -20,6 +20,8 @@ pub struct TelegramState {
     bot: Mutex<Option<Bot>>,
     /// Chat ID of the owner's conversation — used as default for proactive sends
     owner_chat_id: Mutex<Option<i64>>,
+    /// Bot's @username — set at startup via get_me(), used for @mention detection in groups
+    bot_username: Mutex<Option<String>>,
 }
 
 impl Default for TelegramState {
@@ -33,6 +35,7 @@ impl TelegramState {
         Self {
             bot: Mutex::new(None),
             owner_chat_id: Mutex::new(None),
+            bot_username: Mutex::new(None),
         }
     }
 
@@ -54,6 +57,16 @@ impl TelegramState {
     /// Get the owner's chat ID for proactive messaging.
     pub async fn owner_chat_id(&self) -> Option<i64> {
         *self.owner_chat_id.lock().await
+    }
+
+    /// Store the bot's @username (set at startup via get_me).
+    pub async fn set_bot_username(&self, username: String) {
+        *self.bot_username.lock().await = Some(username);
+    }
+
+    /// Get the bot's @username for mention detection.
+    pub async fn bot_username(&self) -> Option<String> {
+        self.bot_username.lock().await.clone()
     }
 
     /// Check if Telegram is currently connected.

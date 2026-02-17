@@ -100,12 +100,8 @@ impl Tool for SlackSendTool {
             }
         };
 
-        // Prepend agent header and split long messages
-        let tagged = format!(
-            "{}\n\n{}",
-            crate::slack::handler::MSG_HEADER,
-            message
-        );
+        // Split long messages
+        let tagged = message.clone();
         let chunks = crate::slack::handler::split_message(&tagged, 3000);
 
         let token = SlackApiToken::new(SlackApiTokenValue::from(bot_token));

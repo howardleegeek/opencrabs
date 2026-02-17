@@ -4,6 +4,10 @@ use opencrabs::{cli, logging};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install rustls crypto provider before any TLS connections (Slack Socket Mode)
+    #[cfg(feature = "slack")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Load .env file before anything else (silently ignore if missing)
     dotenvy::dotenv().ok();
 

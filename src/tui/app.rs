@@ -564,6 +564,8 @@ impl App {
                 }
             }
             TuiEvent::ToolCallStarted { tool_name, tool_input } => {
+                tracing::info!("[TUI] ToolCallStarted: {} (active_group={}, msg_count={})",
+                    tool_name, self.active_tool_group.is_some(), self.messages.len());
                 // Show tool call in progress
                 let desc = Self::format_tool_description(&tool_name, &tool_input);
                 let entry = ToolCallEntry { description: desc, success: true, details: None };
@@ -580,6 +582,8 @@ impl App {
                 }
             }
             TuiEvent::IntermediateText(text) => {
+                tracing::info!("[TUI] IntermediateText: len={} active_group={} streaming={}",
+                    text.len(), self.active_tool_group.is_some(), self.streaming_response.is_some());
                 // Clear streaming response — text was already shown live via streaming chunks,
                 // now it becomes a permanent message in the chat history.
                 self.streaming_response = None;
@@ -1088,6 +1092,7 @@ impl App {
                         };
                         if matches!(option, ApprovalOption::AllowAlways) {
                             self.approval_auto_session = true;
+                            self.push_system_message("Auto-approve enabled for this session. Use /approve to reset.".to_string());
                         }
                         let response = ToolApprovalResponse {
                             request_id,
@@ -1359,6 +1364,17 @@ impl App {
                         self.streaming_response = None;
                         self.cancel_token = None;
                         self.escape_pending_at = None;
+                        // Deny any pending approvals so agent callbacks don't hang
+                        for msg in &mut self.messages {
+                            if let Some(ref mut approval) = msg.approval && approval.state == ApprovalState::Pending {
+                                let _ = approval.response_tx.send(ToolApprovalResponse {
+                                    request_id: approval.request_id,
+                                    approved: false,
+                                    reason: Some("Operation cancelled".to_string()),
+                                });
+                                approval.state = ApprovalState::Denied("Operation cancelled".to_string());
+                            }
+                        }
                         // Finalize any active tool group
                         if let Some(group) = self.active_tool_group.take() {
                             let count = group.calls.len();
@@ -2264,6 +2280,11 @@ impl App {
         }
         for msg in &mut self.messages {
             if let Some(ref mut approval) = msg.approval && approval.state == ApprovalState::Pending {
+                let _ = approval.response_tx.send(ToolApprovalResponse {
+                    request_id: approval.request_id,
+                    approved: false,
+                    reason: Some("Superseded".to_string()),
+                });
                 approval.state = ApprovalState::Denied("Superseded".to_string());
             }
         }
@@ -2390,11 +2411,15 @@ impl App {
         self.streaming_response = None;
         self.cancel_token = None;
 
-        // Clean up stale pending approvals — if the agent finished but approval
-        // messages are still Pending, mark them as denied so they don't block rendering
+        // Clean up stale pending approvals — send deny so agent callbacks don't hang
         for msg in &mut self.messages {
             if let Some(ref mut approval) = msg.approval && approval.state == ApprovalState::Pending {
                 tracing::warn!("Cleaning up stale pending approval for tool '{}'", approval.tool_name);
+                let _ = approval.response_tx.send(ToolApprovalResponse {
+                    request_id: approval.request_id,
+                    approved: false,
+                    reason: Some("Agent completed without resolution".to_string()),
+                });
                 approval.state = ApprovalState::Denied("Agent completed without resolution".to_string());
             }
         }
@@ -3007,6 +3032,17 @@ impl App {
         self.is_processing = false;
         self.streaming_response = None;
         self.cancel_token = None;
+        // Deny any pending approvals so agent callbacks don't hang
+        for msg in &mut self.messages {
+            if let Some(ref mut approval) = msg.approval && approval.state == ApprovalState::Pending {
+                let _ = approval.response_tx.send(ToolApprovalResponse {
+                    request_id: approval.request_id,
+                    approved: false,
+                    reason: Some("Error occurred".to_string()),
+                });
+                approval.state = ApprovalState::Denied("Error occurred".to_string());
+            }
+        }
         // Finalize any active tool group
         if let Some(group) = self.active_tool_group.take() {
             let count = group.calls.len();
@@ -3072,6 +3108,11 @@ impl App {
         // Clear any stale pending approvals from previous requests
         for msg in &mut self.messages {
             if let Some(ref mut approval) = msg.approval && approval.state == ApprovalState::Pending {
+                let _ = approval.response_tx.send(ToolApprovalResponse {
+                    request_id: approval.request_id,
+                    approved: false,
+                    reason: Some("Superseded by new request".to_string()),
+                });
                 approval.state = ApprovalState::Denied("Superseded by new request".to_string());
             }
         }

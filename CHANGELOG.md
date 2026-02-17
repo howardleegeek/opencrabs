@@ -5,6 +5,27 @@ All notable changes to OpenCrab will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14] - 2026-02-17
+
+### Added
+- **Discord Integration** -- Full Discord bot with message forwarding, per-user session routing, image attachment support, proactive messaging via `discord_send` tool, and dynamic connection via `discord_connect` tool
+- **Slack Integration** -- Full Slack bot via Socket Mode (no public endpoint needed) with message forwarding, session sharing, proactive messaging via `slack_send` tool, and dynamic connection via `slack_connect` tool
+- **Secure Bot Messaging: `respond_to` Mode** -- New `respond_to` config field for all platforms: `"mention"` (default, most secure), `"all"` (old behavior), or `"dm_only"`. DMs always get a response regardless of mode
+- **Channel Allowlists** -- New `allowed_channels` config field restricts which group channels bots are active in. Empty = all channels. DMs always pass
+- **Bot @Mention Detection** -- Discord checks `msg.mentions` for bot user ID, Telegram checks `@bot_username` or reply-to-bot, Slack checks `<@BOT_USER_ID>` in text. Bot mention text is stripped before sending to agent
+- **Bot Identity Caching** -- Discord stores bot user ID from `ready` event, Telegram fetches `@username` via `get_me()` at startup, Slack fetches bot user ID via `auth.test` at startup
+- **Troubleshooting Section in README** -- Documents the known session corruption issue where agent hallucinates tool calls, with workaround (start new session)
+
+### Fixed
+- **Pending Tool Approvals Hanging Agent** -- Approval callbacks were never resolved on cancel, error, supersede, or agent completion, causing the agent to hang indefinitely. All code paths now properly deny pending approvals with `response_tx.send()`
+- **Stale Approval Cleanup** -- Cancel (Escape), error handler, new request, and agent completion all now send deny responses before marking approvals as denied
+- **Rustls Crypto Provider for Slack** -- Install `ring` crypto provider at startup before any TLS connections, fixing Slack Socket Mode panics
+
+### Changed
+- **Proactive Message Branding Removed** -- `discord_send`, `slack_send`, `telegram_send` tools no longer prepend `MSG_HEADER` to outgoing messages
+- **Agent Logging** -- Improved iteration logging: shows "completed after N tool iterations" or "responded with text only"
+- **Auto-Approve Feedback** -- Selecting "Allow Always" now shows a system message confirming auto-approve is enabled for the session
+
 ## [0.2.13] - 2026-02-17
 
 ### Added

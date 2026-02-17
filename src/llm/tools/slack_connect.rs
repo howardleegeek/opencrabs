@@ -60,10 +60,12 @@ impl Tool for SlackConnectTool {
                 "allowed_ids": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Slack user IDs to allow (e.g. 'U12345678'). If empty, all messages accepted."
+                    "description": "Slack user IDs allowed to talk to the bot (e.g. 'U12345678'). \
+                                    Ask the user for their Slack member ID (Profile → ⋯ → Copy member ID). \
+                                    If empty, all workspace users can message the bot."
                 }
             },
-            "required": ["bot_token", "app_token"]
+            "required": ["bot_token", "app_token", "allowed_ids"]
         })
     }
 
@@ -107,7 +109,7 @@ impl Tool for SlackConnectTool {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
-        // Save tokens to keyring for persistence
+        // Save tokens to keyring as backup
         if let Ok(entry) = keyring::Entry::new("opencrabs", "slack_bot_token") {
             let _ = entry.set_password(&bot_token);
         }
@@ -115,8 +117,15 @@ impl Tool for SlackConnectTool {
             let _ = entry.set_password(&app_token);
         }
 
-        // Persist enabled state to config
+        // Persist to config so startup can read them (field is 'token', not 'bot_token')
         let _ = crate::config::Config::write_key("channels.slack", "enabled", "true");
+        let _ = crate::config::Config::write_key("channels.slack", "token", &bot_token);
+        let _ = crate::config::Config::write_key("channels.slack", "app_token", &app_token);
+        if !allowed_ids.is_empty() {
+            let _ = crate::config::Config::write_array(
+                "channels.slack", "allowed_ids", &allowed_ids,
+            );
+        }
 
         // Create and spawn the Slack agent
         let factory = self.channel_factory.clone();
@@ -131,6 +140,8 @@ impl Tool for SlackConnectTool {
             allowed_ids,
             shared_session,
             slack_state.clone(),
+            crate::config::RespondTo::default(),
+            vec![],
         );
 
         let _handle = sl_agent.start(bot_token, app_token);

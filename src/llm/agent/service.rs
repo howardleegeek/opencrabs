@@ -546,8 +546,11 @@ impl AgentService {
             tracing::debug!("Found {} tool uses to execute", tool_uses.len());
 
             if tool_uses.is_empty() {
-                // No tool use - we're done
-                tracing::debug!("No tool uses found, completing with final response");
+                if iteration > 0 {
+                    tracing::info!("Agent completed after {} tool iterations", iteration);
+                } else {
+                    tracing::info!("Agent responded with text only (no tool calls)");
+                }
                 final_response = Some(response);
                 break;
             }

@@ -4,7 +4,7 @@
 
 use super::handler::handle_message;
 use super::TelegramState;
-use crate::config::VoiceConfig;
+use crate::config::{RespondTo, VoiceConfig};
 use crate::llm::agent::AgentService;
 use crate::services::{ServiceContext, SessionService};
 use std::collections::{HashMap, HashSet};
@@ -23,6 +23,8 @@ pub struct TelegramAgent {
     /// Shared session ID from the TUI — owner user shares the terminal session
     shared_session_id: Arc<Mutex<Option<Uuid>>>,
     telegram_state: Arc<TelegramState>,
+    respond_to: RespondTo,
+    allowed_channels: HashSet<String>,
 }
 
 impl TelegramAgent {
@@ -34,6 +36,8 @@ impl TelegramAgent {
         openai_api_key: Option<String>,
         shared_session_id: Arc<Mutex<Option<Uuid>>>,
         telegram_state: Arc<TelegramState>,
+        respond_to: RespondTo,
+        allowed_channels: Vec<String>,
     ) -> Self {
         Self {
             agent_service,
@@ -43,6 +47,8 @@ impl TelegramAgent {
             openai_api_key,
             shared_session_id,
             telegram_state,
+            respond_to,
+            allowed_channels: allowed_channels.into_iter().collect(),
         }
     }
 
@@ -61,6 +67,19 @@ impl TelegramAgent {
             // Store bot in state for proactive messaging
             self.telegram_state.set_bot(bot.clone()).await;
 
+            // Fetch and cache the bot's @username for mention detection
+            match bot.get_me().await {
+                Ok(me) => {
+                    if let Some(ref username) = me.username {
+                        tracing::info!("Telegram: bot username is @{}", username);
+                        self.telegram_state.set_bot_username(username.clone()).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Telegram: failed to get bot info (get_me): {}", e);
+                }
+            }
+
             // Per-user session tracking for non-owner users (owner shares TUI session)
             let extra_sessions: Arc<Mutex<HashMap<i64, Uuid>>> = Arc::new(Mutex::new(HashMap::new()));
             let agent = self.agent_service.clone();
@@ -71,6 +90,8 @@ impl TelegramAgent {
             let bot_token = Arc::new(token);
             let shared_session = self.shared_session_id.clone();
             let telegram_state = self.telegram_state.clone();
+            let respond_to = Arc::new(self.respond_to);
+            let allowed_channels: Arc<HashSet<String>> = Arc::new(self.allowed_channels);
 
             let handler = Update::filter_message().endpoint(
                 move |bot: Bot, msg: Message| {
@@ -83,11 +104,13 @@ impl TelegramAgent {
                     let bot_token = bot_token.clone();
                     let shared_session = shared_session.clone();
                     let telegram_state = telegram_state.clone();
+                    let respond_to = respond_to.clone();
+                    let allowed_channels = allowed_channels.clone();
                     async move {
                         handle_message(
                             bot, msg, agent, session_svc, allowed, extra_sessions,
                             voice_config, openai_key, bot_token, shared_session,
-                            telegram_state,
+                            telegram_state, &respond_to, &allowed_channels,
                         )
                         .await
                     }

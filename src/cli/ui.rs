@@ -374,6 +374,8 @@ pub(crate) async fn cmd_chat(
                     openai_key,
                     app.shared_session_id(),
                     telegram_state.clone(),
+                    tg.respond_to.clone(),
+                    tg.allowed_channels.clone(),
                 );
                 tracing::info!("Spawning Telegram bot ({} allowed users)", tg.allowed_users.len());
                 Some(bot.start(token.clone()))
@@ -423,6 +425,8 @@ pub(crate) async fn cmd_chat(
                     config.voice.clone(),
                     app.shared_session_id(),
                     discord_state.clone(),
+                    dc.respond_to.clone(),
+                    dc.allowed_channels.clone(),
                 );
                 tracing::info!(
                     "Spawning Discord bot ({} allowed users)",
@@ -455,6 +459,8 @@ pub(crate) async fn cmd_chat(
                     sl.allowed_ids.clone(),
                     app.shared_session_id(),
                     slack_state.clone(),
+                    sl.respond_to.clone(),
+                    sl.allowed_channels.clone(),
                 );
                 tracing::info!(
                     "Spawning Slack bot ({} allowed IDs)",

@@ -394,11 +394,6 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // Render active tool group (live, during processing)
-    if let Some(ref group) = app.active_tool_group {
-        render_tool_group(&mut lines, group, true);
-    }
-
     let has_pending_approval = app.has_pending_approval();
 
     // Add streaming response if present (hide when approval is pending)
@@ -451,6 +446,12 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::Rgb(184, 134, 11)),
             ),
         ]));
+    }
+
+    // Render active tool group (live, during processing) — below streaming text
+    // so it's always visible at the bottom with auto-scroll
+    if let Some(ref group) = app.active_tool_group {
+        render_tool_group(&mut lines, group, true);
     }
 
     // Show error message if present
@@ -605,9 +606,13 @@ fn render_tool_group<'a>(
     group: &super::app::ToolCallGroup,
     is_active: bool,
 ) {
-    // Header line: ● Processing or ● N tool calls
+    // Header line: ● Processing: <tool> or ● N tool calls
     let header = if is_active {
-        "Processing".to_string()
+        if let Some(last) = group.calls.last() {
+            format!("Processing: {}", last.description)
+        } else {
+            "Processing".to_string()
+        }
     } else {
         let count = group.calls.len();
         format!("{} tool call{}", count, if count == 1 { "" } else { "s" })

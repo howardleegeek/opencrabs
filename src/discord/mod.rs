@@ -19,6 +19,8 @@ pub struct DiscordState {
     http: Mutex<Option<Arc<serenity::http::Http>>>,
     /// Channel ID of the owner's last message — used as default for proactive sends
     owner_channel_id: Mutex<Option<u64>>,
+    /// Bot's own user ID — set on ready, used for @mention detection
+    bot_user_id: Mutex<Option<u64>>,
 }
 
 impl Default for DiscordState {
@@ -32,6 +34,7 @@ impl DiscordState {
         Self {
             http: Mutex::new(None),
             owner_channel_id: Mutex::new(None),
+            bot_user_id: Mutex::new(None),
         }
     }
 
@@ -56,6 +59,16 @@ impl DiscordState {
     /// Get the owner's last channel ID for proactive messaging.
     pub async fn owner_channel_id(&self) -> Option<u64> {
         *self.owner_channel_id.lock().await
+    }
+
+    /// Store the bot's own user ID (set from ready event).
+    pub async fn set_bot_user_id(&self, id: u64) {
+        *self.bot_user_id.lock().await = Some(id);
+    }
+
+    /// Get the bot's user ID for @mention detection.
+    pub async fn bot_user_id(&self) -> Option<u64> {
+        *self.bot_user_id.lock().await
     }
 
     /// Check if Discord is currently connected.

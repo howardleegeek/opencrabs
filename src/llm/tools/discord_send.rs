@@ -98,12 +98,8 @@ impl Tool for DiscordSendTool {
             }
         };
 
-        // Prepend agent header and split long messages
-        let tagged = format!(
-            "{}\n\n{}",
-            crate::discord::handler::MSG_HEADER,
-            message
-        );
+        // Split long messages
+        let tagged = message.clone();
         let chunks = crate::discord::handler::split_message(&tagged, 2000);
 
         let channel = serenity::model::id::ChannelId::new(channel_id);

@@ -7,6 +7,7 @@
 //! Socket Mode callbacks require plain function pointers (not closures).
 
 use super::SlackState;
+use crate::config::RespondTo;
 use crate::llm::agent::AgentService;
 use crate::services::SessionService;
 use slack_morphism::prelude::*;
@@ -15,8 +16,6 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-/// Header prepended to all outgoing messages so the user knows it's from the agent.
-pub const MSG_HEADER: &str = "\u{1f980} *OpenCrabs*";
 
 /// Global handler state — set once by the agent before starting the listener.
 pub static HANDLER_STATE: OnceLock<Arc<HandlerState>> = OnceLock::new();
@@ -30,6 +29,9 @@ pub struct HandlerState {
     pub shared_session: Arc<Mutex<Option<Uuid>>>,
     pub slack_state: Arc<SlackState>,
     pub bot_token: String,
+    pub respond_to: RespondTo,
+    pub allowed_channels: Arc<HashSet<String>>,
+    pub bot_user_id: Option<String>,
 }
 
 /// Split a message into chunks that fit Slack's limit (conservative 3000 chars).
@@ -125,6 +127,44 @@ async fn handle_message(msg: &SlackMessageEvent, client: Arc<SlackHyperClient>) 
         return;
     }
 
+    // respond_to / allowed_channels filtering — DMs (channel starts with 'D') always pass
+    let is_dm = channel_id.starts_with('D');
+    if !is_dm {
+        // Check allowed_channels (empty = all channels allowed)
+        if !state.allowed_channels.is_empty() && !state.allowed_channels.contains(&channel_id) {
+            tracing::debug!("Slack: ignoring message in non-allowed channel {}", channel_id);
+            return;
+        }
+
+        match state.respond_to {
+            RespondTo::DmOnly => {
+                tracing::debug!("Slack: respond_to=dm_only, ignoring channel message");
+                return;
+            }
+            RespondTo::Mention => {
+                let mentioned = state.bot_user_id.as_ref().is_some_and(|bid| {
+                    text.contains(&format!("<@{}>", bid))
+                });
+                if !mentioned {
+                    tracing::debug!("Slack: respond_to=mention, bot not mentioned — ignoring");
+                    return;
+                }
+            }
+            RespondTo::All => {} // pass through
+        }
+    }
+
+    // Strip <@BOT_ID> from text when responding to a mention
+    let text = if !is_dm && state.respond_to == RespondTo::Mention {
+        if let Some(ref bid) = state.bot_user_id {
+            text.replace(&format!("<@{}>", bid), "").trim().to_string()
+        } else {
+            text
+        }
+    } else {
+        text
+    };
+
     let text_preview = &text[..text.len().min(50)];
     tracing::info!("Slack: message from {}: {}", user_id, text_preview);
 
@@ -192,7 +232,7 @@ async fn handle_message(msg: &SlackMessageEvent, client: Arc<SlackHyperClient>) 
         .await
     {
         Ok(response) => {
-            let tagged = format!("{}\n\n{}", MSG_HEADER, response.content);
+            let tagged = response.content.clone();
             let token = SlackApiToken::new(SlackApiTokenValue::from(state.bot_token.clone()));
             let session = client.open_session(&token);
 
@@ -210,7 +250,7 @@ async fn handle_message(msg: &SlackMessageEvent, client: Arc<SlackHyperClient>) 
             tracing::error!("Slack: agent error: {}", e);
             let token = SlackApiToken::new(SlackApiTokenValue::from(state.bot_token.clone()));
             let session = client.open_session(&token);
-            let error_msg = format!("{}\n\nError: {}", MSG_HEADER, e);
+            let error_msg = format!("Error: {}", e);
             let request = SlackApiChatPostMessageRequest::new(
                 SlackChannelId::new(channel_id),
                 SlackMessageContent::new().with_text(error_msg),

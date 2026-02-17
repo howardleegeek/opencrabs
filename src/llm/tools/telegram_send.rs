@@ -94,12 +94,8 @@ impl Tool for TelegramSendTool {
             }
         };
 
-        // Prepend agent header and split long messages
-        let tagged = format!(
-            "{}\n\n{}",
-            crate::telegram::handler::MSG_HEADER,
-            message
-        );
+        // Split long messages
+        let tagged = message.clone();
         let chunks = crate::telegram::handler::split_message(&tagged, 4096);
         for chunk in chunks {
             if let Err(e) = bot.send_message(ChatId(chat_id), chunk).await {

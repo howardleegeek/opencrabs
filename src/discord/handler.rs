@@ -4,6 +4,7 @@
 //! session routing (owner shares TUI session, others get per-user sessions).
 
 use super::DiscordState;
+use crate::config::RespondTo;
 use crate::llm::agent::AgentService;
 use crate::services::SessionService;
 use std::collections::{HashMap, HashSet};
@@ -15,7 +16,6 @@ use serenity::model::channel::Message;
 use serenity::prelude::*;
 
 /// Header prepended to all outgoing messages so the user knows it's from the agent.
-pub const MSG_HEADER: &str = "\u{1f980} **OpenCrabs**";
 
 /// Split a message into chunks that fit Discord's 2000 char limit.
 pub fn split_message(text: &str, max_len: usize) -> Vec<&str> {
@@ -51,6 +51,8 @@ pub(crate) async fn handle_message(
     extra_sessions: Arc<Mutex<HashMap<u64, Uuid>>>,
     shared_session: Arc<Mutex<Option<Uuid>>>,
     discord_state: Arc<DiscordState>,
+    respond_to: &RespondTo,
+    allowed_channels: &HashSet<String>,
 ) {
     let user_id = msg.author.id.get() as i64;
 
@@ -60,8 +62,46 @@ pub(crate) async fn handle_message(
         return;
     }
 
+    // respond_to / allowed_channels filtering — DMs always pass
+    let is_dm = msg.guild_id.is_none();
+    if !is_dm {
+        let channel_str = msg.channel_id.get().to_string();
+
+        // Check allowed_channels (empty = all channels allowed)
+        if !allowed_channels.is_empty() && !allowed_channels.contains(&channel_str) {
+            tracing::debug!("Discord: ignoring message in non-allowed channel {}", channel_str);
+            return;
+        }
+
+        match respond_to {
+            RespondTo::DmOnly => {
+                tracing::debug!("Discord: respond_to=dm_only, ignoring channel message");
+                return;
+            }
+            RespondTo::Mention => {
+                let bot_id = discord_state.bot_user_id().await;
+                let mentioned = bot_id.is_some_and(|bid| {
+                    msg.mentions.iter().any(|u| u.id.get() == bid)
+                });
+                if !mentioned {
+                    tracing::debug!("Discord: respond_to=mention, bot not mentioned — ignoring");
+                    return;
+                }
+            }
+            RespondTo::All => {} // pass through
+        }
+    }
+
     // Extract text content
     let mut content = msg.content.clone();
+
+    // Strip bot @mention from content when responding to a mention
+    if !is_dm && *respond_to == RespondTo::Mention {
+        if let Some(bot_id) = discord_state.bot_user_id().await {
+            let mention_tag = format!("<@{}>", bot_id);
+            content = content.replace(&mention_tag, "").trim().to_string();
+        }
+    }
     if content.is_empty() && msg.attachments.is_empty() {
         return;
     }
@@ -141,7 +181,7 @@ pub(crate) async fn handle_message(
     // Send to agent
     match agent.send_message_with_tools(session_id, content, None).await {
         Ok(response) => {
-            let tagged = format!("{}\n\n{}", MSG_HEADER, response.content);
+            let tagged = response.content.clone();
             for chunk in split_message(&tagged, 2000) {
                 if let Err(e) = msg.channel_id.say(&ctx.http, chunk).await {
                     tracing::error!("Discord: failed to send reply: {}", e);
@@ -150,7 +190,7 @@ pub(crate) async fn handle_message(
         }
         Err(e) => {
             tracing::error!("Discord: agent error: {}", e);
-            let error_msg = format!("{}\n\nError: {}", MSG_HEADER, e);
+            let error_msg = format!("Error: {}", e);
             let _ = msg.channel_id.say(&ctx.http, error_msg).await;
         }
     }

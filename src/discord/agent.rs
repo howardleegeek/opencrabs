@@ -4,7 +4,7 @@
 
 use super::handler;
 use super::DiscordState;
-use crate::config::VoiceConfig;
+use crate::config::{RespondTo, VoiceConfig};
 use crate::llm::agent::AgentService;
 use crate::services::{ServiceContext, SessionService};
 use std::collections::{HashMap, HashSet};
@@ -25,6 +25,8 @@ pub struct DiscordAgent {
     voice_config: VoiceConfig,
     shared_session_id: Arc<Mutex<Option<Uuid>>>,
     discord_state: Arc<DiscordState>,
+    respond_to: RespondTo,
+    allowed_channels: Vec<String>,
 }
 
 impl DiscordAgent {
@@ -35,6 +37,8 @@ impl DiscordAgent {
         voice_config: VoiceConfig,
         shared_session_id: Arc<Mutex<Option<Uuid>>>,
         discord_state: Arc<DiscordState>,
+        respond_to: RespondTo,
+        allowed_channels: Vec<String>,
     ) -> Self {
         Self {
             agent_service,
@@ -43,6 +47,8 @@ impl DiscordAgent {
             voice_config,
             shared_session_id,
             discord_state,
+            respond_to,
+            allowed_channels,
         }
     }
 
@@ -61,6 +67,9 @@ impl DiscordAgent {
             let extra_sessions: Arc<Mutex<HashMap<u64, Uuid>>> =
                 Arc::new(Mutex::new(HashMap::new()));
 
+            let allowed_channels: HashSet<String> =
+                self.allowed_channels.into_iter().collect();
+
             let event_handler = Handler {
                 agent: self.agent_service,
                 session_svc: self.session_service,
@@ -68,6 +77,8 @@ impl DiscordAgent {
                 extra_sessions,
                 shared_session: self.shared_session_id,
                 discord_state: self.discord_state,
+                respond_to: self.respond_to,
+                allowed_channels: Arc::new(allowed_channels),
             };
 
             let intents = GatewayIntents::GUILD_MESSAGES
@@ -100,14 +111,19 @@ struct Handler {
     extra_sessions: Arc<Mutex<HashMap<u64, Uuid>>>,
     shared_session: Arc<Mutex<Option<Uuid>>>,
     discord_state: Arc<DiscordState>,
+    respond_to: RespondTo,
+    allowed_channels: Arc<HashSet<String>>,
 }
 
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
-        tracing::info!("Discord: connected as {}", ready.user.name);
+        tracing::info!("Discord: connected as {} (id={})", ready.user.name, ready.user.id);
         self.discord_state
             .set_connected(ctx.http.clone(), None)
+            .await;
+        self.discord_state
+            .set_bot_user_id(ready.user.id.get())
             .await;
     }
 
@@ -126,6 +142,8 @@ impl EventHandler for Handler {
             self.extra_sessions.clone(),
             self.shared_session.clone(),
             self.discord_state.clone(),
+            &self.respond_to,
+            &self.allowed_channels,
         )
         .await;
     }

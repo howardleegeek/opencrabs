@@ -55,10 +55,12 @@ impl Tool for DiscordConnectTool {
                 "allowed_users": {
                     "type": "array",
                     "items": { "type": "integer" },
-                    "description": "Discord user IDs to allow. If empty, all messages accepted."
+                    "description": "Discord user IDs allowed to talk to the bot. \
+                                    Enable Developer Mode in Discord settings, then right-click \
+                                    your username → Copy User ID. If empty, anyone can message the bot."
                 }
             },
-            "required": ["token"]
+            "required": ["token", "allowed_users"]
         })
     }
 
@@ -114,6 +116,8 @@ impl Tool for DiscordConnectTool {
             voice_config,
             shared_session,
             discord_state.clone(),
+            crate::config::RespondTo::default(),
+            vec![],
         );
 
         let _handle = dc_agent.start(token);

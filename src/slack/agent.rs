@@ -5,6 +5,7 @@
 
 use super::handler;
 use super::SlackState;
+use crate::config::RespondTo;
 use crate::llm::agent::AgentService;
 use crate::services::{ServiceContext, SessionService};
 use slack_morphism::prelude::*;
@@ -20,6 +21,8 @@ pub struct SlackAgent {
     allowed_ids: Vec<String>,
     shared_session_id: Arc<Mutex<Option<Uuid>>>,
     slack_state: Arc<SlackState>,
+    respond_to: RespondTo,
+    allowed_channels: Vec<String>,
 }
 
 impl SlackAgent {
@@ -29,6 +32,8 @@ impl SlackAgent {
         allowed_ids: Vec<String>,
         shared_session_id: Arc<Mutex<Option<Uuid>>>,
         slack_state: Arc<SlackState>,
+        respond_to: RespondTo,
+        allowed_channels: Vec<String>,
     ) -> Self {
         Self {
             agent_service,
@@ -36,6 +41,8 @@ impl SlackAgent {
             allowed_ids,
             shared_session_id,
             slack_state,
+            respond_to,
+            allowed_channels,
         }
     }
 
@@ -60,6 +67,23 @@ impl SlackAgent {
                 .set_connected(client.clone(), bot_token.clone(), None)
                 .await;
 
+            // Fetch bot user ID via auth.test for @mention detection
+            let bot_user_id = {
+                let token = SlackApiToken::new(SlackApiTokenValue::from(bot_token.clone()));
+                let session = client.open_session(&token);
+                match session.auth_test().await {
+                    Ok(resp) => {
+                        let uid = resp.user_id.0.clone();
+                        tracing::info!("Slack: bot user ID is {}", uid);
+                        Some(uid)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Slack: auth.test failed, @mention detection disabled: {}", e);
+                        None
+                    }
+                }
+            };
+
             // Set up handler state (global static — one Slack instance per process)
             let handler_state = handler::HandlerState {
                 agent: self.agent_service,
@@ -69,6 +93,9 @@ impl SlackAgent {
                 shared_session: self.shared_session_id,
                 slack_state: self.slack_state.clone(),
                 bot_token: bot_token.clone(),
+                respond_to: self.respond_to,
+                allowed_channels: Arc::new(self.allowed_channels.into_iter().collect()),
+                bot_user_id,
             };
             handler::HANDLER_STATE
                 .set(Arc::new(handler_state))

@@ -108,6 +108,25 @@ pub struct ChannelsConfig {
     pub imessage: ChannelConfig,
 }
 
+/// When the bot should respond to messages in group channels.
+/// DMs always get a response regardless of this setting.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RespondTo {
+    /// Respond to all messages from allowed users
+    All,
+    /// Only respond to direct messages, ignore group channels entirely
+    DmOnly,
+    /// Only respond when @mentioned (or replied-to on Telegram)
+    Mention,
+}
+
+impl Default for RespondTo {
+    fn default() -> Self {
+        Self::Mention
+    }
+}
+
 /// Individual channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChannelConfig {
@@ -127,6 +146,12 @@ pub struct ChannelConfig {
     /// String-based user IDs (Slack `U12345678`, future channels)
     #[serde(default)]
     pub allowed_ids: Vec<String>,
+    /// When the bot should respond: "all", "dm_only", or "mention" (default)
+    #[serde(default)]
+    pub respond_to: RespondTo,
+    /// Restrict bot to specific channel IDs. Empty = all channels. DMs always pass.
+    #[serde(default)]
+    pub allowed_channels: Vec<String>,
 }
 
 /// Voice processing configuration (STT + TTS)
@@ -691,22 +716,40 @@ impl Config {
             toml::Value::Table(toml::map::Map::new())
         };
 
-        // Navigate/create the section table
-        let table = doc.as_table_mut()
+        // Navigate/create the section table (supports dotted paths like "channels.slack")
+        let parts: Vec<&str> = section.split('.').collect();
+        let mut current = doc.as_table_mut()
             .context("config root is not a table")?;
 
-        let section_table = if let Some(existing) = table.get_mut(section) {
-            existing.as_table_mut().context("section is not a table")?
-        } else {
-            table.insert(section.to_string(), toml::Value::Table(toml::map::Map::new()));
-            table.get_mut(section)
-                .context("just-inserted section missing")?
+        for part in &parts {
+            if !current.contains_key(*part) {
+                current.insert(part.to_string(), toml::Value::Table(toml::map::Map::new()));
+            }
+            current = current.get_mut(*part)
+                .context("section not found after insert")?
                 .as_table_mut()
-                .context("just-inserted section is not a table")?
-        };
+                .with_context(|| format!("'{}' is not a table", part))?;
+        }
+        let section_table = current;
 
-        // Parse the value — try integer, float, bool, then fall back to string
-        let parsed: toml::Value = if let Ok(v) = value.parse::<i64>() {
+        // Parse the value — try JSON array, integer, float, bool, then fall back to string
+        let parsed: toml::Value = if value.starts_with('[') && value.ends_with(']') {
+            // Try parsing as JSON array → TOML array
+            if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(value) {
+                let toml_arr: Vec<toml::Value> = arr.into_iter().filter_map(|v| match v {
+                    serde_json::Value::String(s) => Some(toml::Value::String(s)),
+                    serde_json::Value::Number(n) => {
+                        if let Some(i) = n.as_i64() { Some(toml::Value::Integer(i)) }
+                        else { n.as_f64().map(toml::Value::Float) }
+                    }
+                    serde_json::Value::Bool(b) => Some(toml::Value::Boolean(b)),
+                    _ => None,
+                }).collect();
+                toml::Value::Array(toml_arr)
+            } else {
+                toml::Value::String(value.to_string())
+            }
+        } else if let Ok(v) = value.parse::<i64>() {
             toml::Value::Integer(v)
         } else if let Ok(v) = value.parse::<f64>() {
             toml::Value::Float(v)
@@ -729,6 +772,50 @@ impl Config {
         let toml_str = toml::to_string_pretty(&doc)?;
         fs::write(&path, toml_str)?;
         tracing::info!("Wrote config key [{section}].{key} = {value}");
+        Ok(())
+    }
+
+    /// Write a string array to a dotted config section.
+    /// e.g. `write_array("channels.slack", "allowed_ids", &["U123"])` →
+    /// `[channels.slack] allowed_ids = ["U123"]`
+    pub fn write_array(section: &str, key: &str, values: &[String]) -> Result<()> {
+        let path = Self::system_config_path()
+            .unwrap_or_else(|| opencrabs_home().join("config.toml"));
+
+        let mut doc: toml::Value = if path.exists() {
+            let content = fs::read_to_string(&path)?;
+            toml::from_str(&content).unwrap_or(toml::Value::Table(toml::map::Map::new()))
+        } else {
+            toml::Value::Table(toml::map::Map::new())
+        };
+
+        // Navigate/create nested section
+        let parts: Vec<&str> = section.split('.').collect();
+        let mut current = doc.as_table_mut()
+            .context("config root is not a table")?;
+
+        for part in &parts {
+            if !current.contains_key(*part) {
+                current.insert(part.to_string(), toml::Value::Table(toml::map::Map::new()));
+            }
+            current = current.get_mut(*part)
+                .context("section not found after insert")?
+                .as_table_mut()
+                .with_context(|| format!("'{}' is not a table", part))?;
+        }
+
+        let arr = values.iter()
+            .map(|v| toml::Value::String(v.clone()))
+            .collect();
+        current.insert(key.to_string(), toml::Value::Array(arr));
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Self::backup_config(&path, 5);
+        let toml_str = toml::to_string_pretty(&doc)?;
+        fs::write(&path, toml_str)?;
+        tracing::info!("Wrote config array [{section}].{key} ({} items)", values.len());
         Ok(())
     }
 

@@ -3,17 +3,16 @@
 //! Processes incoming messages: text, voice (STT/TTS), photos, image documents, allowlist enforcement.
 
 use super::TelegramState;
-use crate::config::VoiceConfig;
+use crate::config::{RespondTo, VoiceConfig};
 use crate::llm::agent::AgentService;
 use crate::services::SessionService;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use teloxide::prelude::*;
-use teloxide::types::InputFile;
+use teloxide::types::{ChatKind, InputFile};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-pub const MSG_HEADER: &str = "🦀 *OpenCrabs*";
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_message(
@@ -28,6 +27,8 @@ pub(crate) async fn handle_message(
     bot_token: Arc<String>,
     shared_session: Arc<Mutex<Option<Uuid>>>,
     telegram_state: Arc<TelegramState>,
+    respond_to: &RespondTo,
+    allowed_channels: &HashSet<String>,
 ) -> ResponseResult<()> {
     let user = match msg.from {
         Some(ref u) => u,
@@ -55,6 +56,44 @@ pub(crate) async fn handle_message(
         bot.send_message(msg.chat.id, "You are not authorized. Send /start to get your user ID.")
             .await?;
         return Ok(());
+    }
+
+    // respond_to / allowed_channels filtering — private chats always pass
+    let is_dm = matches!(msg.chat.kind, ChatKind::Private { .. });
+    if !is_dm {
+        let chat_id_str = msg.chat.id.0.to_string();
+
+        // Check allowed_channels (empty = all channels allowed)
+        if !allowed_channels.is_empty() && !allowed_channels.contains(&chat_id_str) {
+            tracing::debug!("Telegram: ignoring message in non-allowed chat {}", chat_id_str);
+            return Ok(());
+        }
+
+        match respond_to {
+            RespondTo::DmOnly => {
+                tracing::debug!("Telegram: respond_to=dm_only, ignoring group message");
+                return Ok(());
+            }
+            RespondTo::Mention => {
+                // Check if bot is @mentioned in text or message is a reply to the bot
+                let bot_username = telegram_state.bot_username().await;
+                let text_content = msg.text().or(msg.caption()).unwrap_or("");
+
+                let mentioned_by_username = bot_username.as_ref().is_some_and(|uname| {
+                    text_content.contains(&format!("@{}", uname))
+                });
+
+                let replied_to_bot = msg.reply_to_message().is_some_and(|reply| {
+                    reply.from.as_ref().is_some_and(|u| u.is_bot)
+                });
+
+                if !mentioned_by_username && !replied_to_bot {
+                    tracing::debug!("Telegram: respond_to=mention, bot not mentioned — ignoring");
+                    return Ok(());
+                }
+            }
+            RespondTo::All => {} // pass through
+        }
     }
 
     // Extract text from either text message or voice note (via STT)
@@ -261,6 +300,17 @@ pub(crate) async fn handle_message(
     } else {
         // Non-text, non-voice, non-photo message -- ignore
         return Ok(());
+    };
+
+    // Strip @bot_username from text when responding to a mention in groups
+    let text = if !is_dm && *respond_to == RespondTo::Mention {
+        if let Some(ref uname) = telegram_state.bot_username().await {
+            text.replace(&format!("@{}", uname), "").trim().to_string()
+        } else {
+            text
+        }
+    } else {
+        text
     };
 
     tracing::info!(

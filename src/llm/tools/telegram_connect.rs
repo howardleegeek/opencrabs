@@ -53,10 +53,12 @@ impl Tool for TelegramConnectTool {
                 "allowed_users": {
                     "type": "array",
                     "items": { "type": "integer" },
-                    "description": "Telegram user IDs to allow. If empty, all messages accepted. Users can send /start to the bot to get their ID."
+                    "description": "Telegram user IDs allowed to talk to the bot. \
+                                    The user can send /start to their bot to see their numeric ID, \
+                                    or find it via @userinfobot. If empty, anyone can message the bot."
                 }
             },
-            "required": ["token"]
+            "required": ["token", "allowed_users"]
         })
     }
 
@@ -113,6 +115,8 @@ impl Tool for TelegramConnectTool {
             openai_key,
             shared_session,
             telegram_state.clone(),
+            crate::config::RespondTo::default(),
+            vec![],
         );
 
         let _handle = tg_agent.start(token);
