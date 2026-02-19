@@ -832,7 +832,7 @@ rebuild tool      # Agent-triggered: build → ProgressEvent::RestartReady → r
 
 **Modules:**
 - `src/brain/self_update.rs` — `SelfUpdater` struct with `auto_detect()`, `build()`, `test()`, `restart()`
-- `src/llm/tools/rebuild.rs` — `RebuildTool` (agent-callable, emits `ProgressEvent::RestartReady`)
+- `src/brain/tools/rebuild.rs` — `RebuildTool` (agent-callable, emits `ProgressEvent::RestartReady`)
 
 ---
 
@@ -885,34 +885,33 @@ opencrabs/
 │   ├── error/            # Error types (OpenCrabsError, ErrorCode)
 │   ├── logging/          # Conditional logging system
 │   ├── app/              # Application lifecycle
-│   ├── brain/            # Dynamic brain system (v0.1.1)
-│   │   ├── mod.rs        # Module root
+│   ├── brain/            # Intelligence layer — LLM providers, agent, tools, brain system
+│   │   ├── agent/        # Agent service + context management
+│   │   ├── provider/     # Provider implementations (Anthropic, OpenAI, OpenRouter, Qwen)
+│   │   ├── tools/        # Tool system (read, write, bash, glob, grep, memory_search, etc.)
+│   │   ├── tokenizer.rs  # Token counting (tiktoken-based)
 │   │   ├── prompt_builder.rs  # BrainLoader — assembles system brain from workspace files
-│   │   ├── commands.rs   # CommandLoader — user-defined slash commands (TOML, with JSON migration)
+│   │   ├── commands.rs   # CommandLoader — user-defined slash commands (TOML)
 │   │   └── self_update.rs # SelfUpdater — build, test, hot-restart via exec()
+│   ├── channels/         # Messaging integrations + voice (feature-gated)
+│   │   ├── factory.rs    # ChannelFactory — shared factory for channel agent services
+│   │   ├── telegram/     # Telegram bot (agent, handler)
+│   │   ├── whatsapp/     # WhatsApp Web client (agent, handler, sqlx_store)
+│   │   ├── discord/      # Discord bot (agent, handler)
+│   │   ├── slack/        # Slack bot via Socket Mode (agent, handler)
+│   │   └── voice/        # STT (Groq Whisper) + TTS (OpenAI)
 │   ├── cli/              # Command-line interface (Clap)
 │   ├── config/           # Configuration (TOML + env + keyring)
-│   │   └── crabrace.rs   # Provider registry integration
 │   ├── db/               # Database layer (SQLx + SQLite)
 │   ├── services/         # Business logic (Session, Message, File, Plan)
-│   ├── memory/           # Memory search (built-in FTS5); data stored at ~/.opencrabs/memory/
-│   ├── llm/              # LLM integration
-│   │   ├── agent/        # Agent service + context management
-│   │   ├── provider/     # Provider implementations (Anthropic, OpenAI, Qwen)
-│   │   ├── tools/        # Tool system (read, write, bash, glob, grep, memory_search, config_manager, etc.)
-│   │   └── prompt/       # Prompt engineering
+│   ├── memory/           # Memory search (FTS5 + vector embeddings via qmd)
 │   ├── tui/              # Terminal UI (Ratatui)
-│   │   ├── onboarding.rs     # 7-step onboarding wizard (state + logic)
+│   │   ├── onboarding.rs     # 8-step onboarding wizard (state + logic)
 │   │   ├── onboarding_render.rs  # Wizard rendering
 │   │   ├── splash.rs     # Splash screen
 │   │   ├── app.rs        # App state + event handling
 │   │   ├── render.rs     # Main render dispatch
 │   │   └── runner.rs     # TUI event loop
-│   ├── lsp/              # LSP integration
-│   ├── events/           # Event handling
-│   ├── message/          # Message types
-│   ├── sync/             # Synchronization utilities
-│   ├── macros/           # Rust macros
 │   ├── utils/            # Utilities (retry, etc.)
 │   ├── migrations/       # SQLite migrations
 │   ├── tests/            # Integration tests

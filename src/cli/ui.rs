@@ -14,7 +14,7 @@ pub(crate) async fn cmd_chat(
 ) -> Result<()> {
     use crate::{
         db::Database,
-        llm::{
+        brain::{
             agent::AgentService,
             tools::{
                 bash::BashTool, brave_search::BraveSearchTool, code_exec::CodeExecTool,
@@ -63,7 +63,7 @@ pub(crate) async fn cmd_chat(
         .context("Failed to run database migrations")?;
 
     // Select provider based on configuration using factory
-    let provider = crate::llm::provider::create_provider(config)?;
+    let provider = crate::brain::provider::create_provider(config)?;
 
     // Create tool registry
     tracing::debug!("Setting up tool registry");
@@ -168,7 +168,7 @@ pub(crate) async fn cmd_chat(
     let event_sender = app.event_sender();
 
     // Create approval callback that sends requests to TUI
-    let approval_callback: crate::llm::agent::ApprovalCallback = Arc::new(move |tool_info| {
+    let approval_callback: crate::brain::agent::ApprovalCallback = Arc::new(move |tool_info| {
         let sender = event_sender.clone();
         Box::pin(async move {
             use crate::tui::events::{ToolApprovalRequest, TuiEvent};
@@ -192,7 +192,7 @@ pub(crate) async fn cmd_chat(
             sender
                 .send(TuiEvent::ToolApprovalRequested(request))
                 .map_err(|e| {
-                    crate::llm::agent::AgentError::Internal(format!(
+                    crate::brain::agent::AgentError::Internal(format!(
                         "Failed to send approval request: {}",
                         e
                     ))
@@ -206,13 +206,13 @@ pub(crate) async fn cmd_chat(
             .await
             .map_err(|_| {
                 tracing::warn!("Approval request timed out after 120s, auto-denying");
-                crate::llm::agent::AgentError::Internal(
+                crate::brain::agent::AgentError::Internal(
                     "Approval request timed out (120s) — auto-denied".to_string(),
                 )
             })?
             .ok_or_else(|| {
                 tracing::warn!("Approval response channel closed unexpectedly");
-                crate::llm::agent::AgentError::Internal(
+                crate::brain::agent::AgentError::Internal(
                     "Approval response channel closed".to_string(),
                 )
             })?;
@@ -223,8 +223,8 @@ pub(crate) async fn cmd_chat(
 
     // Create progress callback that sends tool events to TUI
     let progress_sender = app.event_sender();
-    let progress_callback: crate::llm::agent::ProgressCallback = Arc::new(move |event| {
-        use crate::llm::agent::ProgressEvent;
+    let progress_callback: crate::brain::agent::ProgressCallback = Arc::new(move |event| {
+        use crate::brain::agent::ProgressEvent;
         use crate::tui::events::TuiEvent;
 
         let result = match event {
@@ -258,14 +258,14 @@ pub(crate) async fn cmd_chat(
 
     // Create message queue callback that checks for queued user messages
     let message_queue = app.message_queue.clone();
-    let message_queue_callback: crate::llm::agent::MessageQueueCallback = Arc::new(move || {
+    let message_queue_callback: crate::brain::agent::MessageQueueCallback = Arc::new(move || {
         let queue = message_queue.clone();
         Box::pin(async move { queue.lock().await.take() })
     });
 
     // Register rebuild tool (needs the progress callback for restart signaling)
     tool_registry.register(Arc::new(
-        crate::llm::tools::rebuild::RebuildTool::new(Some(progress_callback.clone())),
+        crate::brain::tools::rebuild::RebuildTool::new(Some(progress_callback.clone())),
     ));
 
     // Create ChannelFactory (shared by static channel spawn + WhatsApp connect tool).
@@ -282,12 +282,12 @@ pub(crate) async fn cmd_chat(
 
     // Shared Telegram state for proactive messaging
     #[cfg(feature = "telegram")]
-    let telegram_state = Arc::new(crate::telegram::TelegramState::new());
+    let telegram_state = Arc::new(crate::channels::telegram::TelegramState::new());
 
     // Register Telegram connect tool (agent-callable bot setup)
     #[cfg(feature = "telegram")]
     tool_registry.register(Arc::new(
-        crate::llm::tools::telegram_connect::TelegramConnectTool::new(
+        crate::brain::tools::telegram_connect::TelegramConnectTool::new(
             channel_factory.clone(),
             telegram_state.clone(),
         ),
@@ -296,17 +296,17 @@ pub(crate) async fn cmd_chat(
     // Register Telegram send tool (proactive messaging)
     #[cfg(feature = "telegram")]
     tool_registry.register(Arc::new(
-        crate::llm::tools::telegram_send::TelegramSendTool::new(telegram_state.clone()),
+        crate::brain::tools::telegram_send::TelegramSendTool::new(telegram_state.clone()),
     ));
 
     // Shared WhatsApp state for proactive messaging (connect + send tools + static agent)
     #[cfg(feature = "whatsapp")]
-    let whatsapp_state = Arc::new(crate::whatsapp::WhatsAppState::new());
+    let whatsapp_state = Arc::new(crate::channels::whatsapp::WhatsAppState::new());
 
     // Register WhatsApp connect tool (agent-callable QR pairing)
     #[cfg(feature = "whatsapp")]
     tool_registry.register(Arc::new(
-        crate::llm::tools::whatsapp_connect::WhatsAppConnectTool::new(
+        crate::brain::tools::whatsapp_connect::WhatsAppConnectTool::new(
             Some(progress_callback.clone()),
             channel_factory.clone(),
             whatsapp_state.clone(),
@@ -316,17 +316,17 @@ pub(crate) async fn cmd_chat(
     // Register WhatsApp send tool (proactive messaging)
     #[cfg(feature = "whatsapp")]
     tool_registry.register(Arc::new(
-        crate::llm::tools::whatsapp_send::WhatsAppSendTool::new(whatsapp_state.clone()),
+        crate::brain::tools::whatsapp_send::WhatsAppSendTool::new(whatsapp_state.clone()),
     ));
 
     // Shared Discord state for proactive messaging
     #[cfg(feature = "discord")]
-    let discord_state = Arc::new(crate::discord::DiscordState::new());
+    let discord_state = Arc::new(crate::channels::discord::DiscordState::new());
 
     // Register Discord connect tool (agent-callable bot setup)
     #[cfg(feature = "discord")]
     tool_registry.register(Arc::new(
-        crate::llm::tools::discord_connect::DiscordConnectTool::new(
+        crate::brain::tools::discord_connect::DiscordConnectTool::new(
             channel_factory.clone(),
             discord_state.clone(),
         ),
@@ -335,17 +335,17 @@ pub(crate) async fn cmd_chat(
     // Register Discord send tool (proactive messaging)
     #[cfg(feature = "discord")]
     tool_registry.register(Arc::new(
-        crate::llm::tools::discord_send::DiscordSendTool::new(discord_state.clone()),
+        crate::brain::tools::discord_send::DiscordSendTool::new(discord_state.clone()),
     ));
 
     // Shared Slack state for proactive messaging
     #[cfg(feature = "slack")]
-    let slack_state = Arc::new(crate::slack::SlackState::new());
+    let slack_state = Arc::new(crate::channels::slack::SlackState::new());
 
     // Register Slack connect tool (agent-callable bot setup)
     #[cfg(feature = "slack")]
     tool_registry.register(Arc::new(
-        crate::llm::tools::slack_connect::SlackConnectTool::new(
+        crate::brain::tools::slack_connect::SlackConnectTool::new(
             channel_factory.clone(),
             slack_state.clone(),
         ),
@@ -354,8 +354,54 @@ pub(crate) async fn cmd_chat(
     // Register Slack send tool (proactive messaging)
     #[cfg(feature = "slack")]
     tool_registry.register(Arc::new(
-        crate::llm::tools::slack_send::SlackSendTool::new(slack_state.clone()),
+        crate::brain::tools::slack_send::SlackSendTool::new(slack_state.clone()),
     ));
+
+    // Create sudo password callback that sends requests to TUI
+    let sudo_sender = app.event_sender();
+    let sudo_callback: crate::brain::agent::SudoCallback = Arc::new(move |command| {
+        let sender = sudo_sender.clone();
+        Box::pin(async move {
+            use crate::tui::events::{SudoPasswordRequest, SudoPasswordResponse, TuiEvent};
+            use tokio::sync::mpsc;
+
+            let (response_tx, mut response_rx) = mpsc::unbounded_channel::<SudoPasswordResponse>();
+
+            let request = SudoPasswordRequest {
+                request_id: uuid::Uuid::new_v4(),
+                command,
+                response_tx,
+            };
+
+            sender
+                .send(TuiEvent::SudoPasswordRequested(request))
+                .map_err(|e| {
+                    crate::brain::agent::AgentError::Internal(format!(
+                        "Failed to send sudo request: {}",
+                        e
+                    ))
+                })?;
+
+            // Wait for user response with timeout
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                response_rx.recv(),
+            )
+            .await
+            .map_err(|_| {
+                crate::brain::agent::AgentError::Internal(
+                    "Sudo password request timed out (120s)".to_string(),
+                )
+            })?
+            .ok_or_else(|| {
+                crate::brain::agent::AgentError::Internal(
+                    "Sudo password channel closed".to_string(),
+                )
+            })?;
+
+            Ok(response.password)
+        })
+    });
 
     // Create agent service with approval callback, progress callback, and message queue
     tracing::debug!("Creating agent service with approval, progress, and message queue callbacks");
@@ -371,7 +417,7 @@ pub(crate) async fn cmd_chat(
             .with_approval_callback(Some(approval_callback))
             .with_progress_callback(Some(progress_callback))
             .with_message_queue_callback(Some(message_queue_callback))
-
+            .with_sudo_callback(Some(sudo_callback))
             .with_working_directory(working_directory.clone())
             .with_brain_path(brain_path),
     );
@@ -403,7 +449,7 @@ pub(crate) async fn cmd_chat(
                 // TTS uses gpt-4o-mini-tts, NOT a text generation model
                 let openai_key = std::env::var("OPENAI_API_KEY").ok()
                     .or_else(|| config.providers.openai.as_ref().and_then(|p| p.api_key.clone()));
-                let bot = crate::telegram::TelegramAgent::new(
+                let bot = crate::channels::telegram::TelegramAgent::new(
                     tg_agent,
                     service_context.clone(),
                     tg.allowed_users.clone(),
@@ -430,7 +476,7 @@ pub(crate) async fn cmd_chat(
     let _whatsapp_handle = {
         let wa = &config.channels.whatsapp;
         if wa.enabled {
-            let wa_agent = crate::whatsapp::WhatsAppAgent::new(
+            let wa_agent = crate::channels::whatsapp::WhatsAppAgent::new(
                 channel_factory.create_agent_service(),
                 service_context.clone(),
                 wa.allowed_phones.clone(),
@@ -455,7 +501,7 @@ pub(crate) async fn cmd_chat(
         let dc_token = dc.token.clone().or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok());
         if dc.enabled || dc_token.is_some() {
             if let Some(ref token) = dc_token {
-                let dc_agent = crate::discord::DiscordAgent::new(
+                let dc_agent = crate::channels::discord::DiscordAgent::new(
                     channel_factory.create_agent_service(),
                     service_context.clone(),
                     dc.allowed_users.clone(),
@@ -490,7 +536,7 @@ pub(crate) async fn cmd_chat(
             .or_else(|| std::env::var("SLACK_APP_TOKEN").ok());
         if sl.enabled || sl_token.is_some() {
             if let (Some(bot_tok), Some(app_tok)) = (sl_token, sl_app_token) {
-                let sl_agent = crate::slack::SlackAgent::new(
+                let sl_agent = crate::channels::slack::SlackAgent::new(
                     channel_factory.create_agent_service(),
                     service_context.clone(),
                     sl.allowed_ids.clone(),

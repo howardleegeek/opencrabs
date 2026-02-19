@@ -224,7 +224,7 @@ pub(crate) async fn cmd_run(
 ) -> Result<()> {
     use crate::{
         db::Database,
-        llm::{
+        brain::{
             agent::AgentService,
             tools::{
                 bash::BashTool, brave_search::BraveSearchTool, code_exec::CodeExecTool,
@@ -246,7 +246,7 @@ pub(crate) async fn cmd_run(
     db.run_migrations().await?;
 
     // Select provider based on configuration using factory
-    let provider = crate::llm::provider::create_provider(config)?;
+    let provider = crate::brain::provider::create_provider(config)?;
 
     // Create tool registry
     let mut tool_registry = ToolRegistry::new();

@@ -5,6 +5,17 @@ All notable changes to OpenCrab will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.21] - 2026-02-19
+
+### Changed
+- **Module Restructure** — Merged `src/llm/` (agent, provider, tools, tokenizer) into `src/brain/`. Brain is now the single intelligence layer — no split across two top-level modules
+- **Channel Consolidation** — Moved `src/slack/`, `src/telegram/`, `src/whatsapp/`, `src/discord/`, and `src/voice/` into `src/channels/`. All messaging integrations + voice (STT/TTS) live under one module with feature-gated submodules
+- **Ctrl+O Expands All** — Ctrl+O now toggles expand/collapse on ALL tool call groups in the session, not just the most recent one
+
+### Fixed
+- **Tool Approval Not Rendering** — Fixed approval prompts not appearing in long-context sessions when user had scrolled up. `auto_scroll` is now reset to `true` when an approval arrives, ensuring the viewport scrolls to show it
+- **Tool Call Details Move** — Fixed `use of moved value` for tool call details field in ToolCallCompleted handler
+
 ## [0.2.20] - 2026-02-19
 
 ### Added

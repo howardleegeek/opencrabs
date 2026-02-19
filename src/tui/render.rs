@@ -17,7 +17,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 /// Render the entire UI
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &mut App) {
     // Show splash screen if in splash mode
     if app.mode == AppMode::Splash {
         splash::render_splash(f, f.area(), app.provider_name(), app.provider_model());
@@ -256,54 +256,55 @@ fn char_boundary_at_width_from_end(s: &str, target_width: usize) -> usize {
 }
 
 /// Render the chat messages
-fn render_chat(f: &mut Frame, app: &App, area: Rect) {
+fn render_chat(f: &mut Frame, app: &mut App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     let content_width = area.width.saturating_sub(2) as usize; // borders
 
-    for msg in &app.messages {
+    // Iterate by index to allow mutable access to render_cache while reading messages
+    for msg_idx in 0..app.messages.len() {
         // Render inline approval messages
-        if let Some(ref approval) = msg.approval {
+        if let Some(ref approval) = app.messages[msg_idx].approval {
             render_inline_approval(&mut lines, approval, content_width);
             lines.push(Line::from(""));
             continue;
         }
 
         // Render inline plan approval selector
-        if let Some(ref plan_approval) = msg.plan_approval {
+        if let Some(ref plan_approval) = app.messages[msg_idx].plan_approval {
             render_inline_plan_approval(&mut lines, plan_approval, content_width);
             lines.push(Line::from(""));
             continue;
         }
 
         // Render /approve policy menu
-        if let Some(ref menu) = msg.approve_menu {
+        if let Some(ref menu) = app.messages[msg_idx].approve_menu {
             render_approve_menu(&mut lines, menu, content_width);
             lines.push(Line::from(""));
             continue;
         }
 
         // Render tool call groups (finalized)
-        if let Some(ref group) = msg.tool_group {
+        if let Some(ref group) = app.messages[msg_idx].tool_group {
             render_tool_group(&mut lines, group, false);
             lines.push(Line::from(""));
             continue;
         }
 
-        if msg.role == "system" {
+        if app.messages[msg_idx].role == "system" {
             // System messages: compact, DarkGray italic, no separator
             let mut spans = vec![
                 Span::styled("  ", Style::default()),
                 Span::styled(
-                    &msg.content,
+                    app.messages[msg_idx].content.clone(),
                     Style::default()
                         .fg(Color::DarkGray)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ];
             // Show expand/collapse hint if this message has details
-            if msg.details.is_some() {
-                if msg.expanded {
+            if app.messages[msg_idx].details.is_some() {
+                if app.messages[msg_idx].expanded {
                     spans.push(Span::styled(
                         " (ctrl+o to collapse)",
                         Style::default().fg(Color::Rgb(100, 100, 100)),
@@ -317,8 +318,8 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
             }
             lines.push(Line::from(spans));
             // Show expanded details
-            if msg.expanded
-                && let Some(ref details) = msg.details {
+            if app.messages[msg_idx].expanded
+                && let Some(ref details) = app.messages[msg_idx].details {
                     for detail_line in details.lines() {
                         lines.push(Line::from(vec![
                             Span::styled("    ", Style::default()),
@@ -334,7 +335,7 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
         }
 
         // Dot/arrow message differentiation (no role labels needed)
-        let is_user = msg.role == "user";
+        let is_user = app.messages[msg_idx].role == "user";
         // User messages: subtle lighter background across full line width
         let msg_bg = if is_user {
             Some(Color::Rgb(30, 30, 38))
@@ -342,8 +343,14 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
             None
         };
 
-        // Parse and render message content as markdown
-        let content_lines = parse_markdown(&msg.content);
+        // Parse and render message content as markdown (cached per message + width)
+        let msg_id = app.messages[msg_idx].id;
+        let cache_key = (msg_id, content_width as u16);
+        if !app.render_cache.contains_key(&cache_key) {
+            let parsed = parse_markdown(&app.messages[msg_idx].content);
+            app.render_cache.insert(cache_key, parsed);
+        }
+        let content_lines = app.render_cache[&cache_key].clone();
         for (i, line) in content_lines.into_iter().enumerate() {
             let mut padded_spans = if i == 0 {
                 if is_user {
@@ -472,6 +479,66 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(""));
     }
 
+    // Show sudo password dialog inline (like approval dialogs)
+    if let Some(ref sudo_req) = app.sudo_pending {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  \u{1F512} ",
+                Style::default().fg(Color::Rgb(184, 134, 11)),
+            ),
+            Span::styled(
+                "sudo password required",
+                Style::default()
+                    .fg(Color::Rgb(184, 134, 11))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        // Show the command being run
+        let cmd_display = if sudo_req.command.len() > 60 {
+            format!("{}...", &sudo_req.command[..57])
+        } else {
+            sudo_req.command.clone()
+        };
+        lines.push(Line::from(vec![
+            Span::styled("  Command: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                cmd_display,
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        // Password input (masked with dots)
+        lines.push(Line::from(vec![
+            Span::styled("  Password: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "\u{2022}".repeat(app.sudo_input.len()),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                "\u{2588}",
+                Style::default().fg(Color::Rgb(70, 130, 180)),
+            ),
+        ]));
+        // Help line
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  [Enter] ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("Submit  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "[Esc] ",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("Cancel", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(""));
+    }
+
     // Calculate scroll offset — lines are pre-wrapped so count is accurate
     let total_lines = lines.len();
     let visible_height = area.height.saturating_sub(2) as usize; // Subtract borders
@@ -497,7 +564,7 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
                 ))
                 .border_style(Style::default().fg(Color::Rgb(70, 130, 180))),
         )
-        .scroll((actual_scroll_offset as u16, 0));
+        .scroll(((actual_scroll_offset.min(u16::MAX as usize)) as u16, 0));
 
     f.render_widget(chat, area);
 }
@@ -624,22 +691,17 @@ fn render_tool_group<'a>(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    if !group.expanded {
-        header_spans.push(Span::styled(
-            " (ctrl+o to expand)",
-            Style::default().fg(Color::Rgb(100, 100, 100)),
-        ));
-    }
+    header_spans.push(Span::styled(
+        if group.expanded { " (ctrl+o to collapse)" } else { " (ctrl+o to expand)" },
+        Style::default().fg(Color::Rgb(100, 100, 100)),
+    ));
     lines.push(Line::from(header_spans));
 
     if group.expanded {
-        // Show all calls with tree lines
+        // Show all calls with tree lines + details
+        let is_last_call = |i: usize| i == group.calls.len() - 1;
         for (i, call) in group.calls.iter().enumerate() {
-            let connector = if i == group.calls.len() - 1 {
-                "└─"
-            } else {
-                "├─"
-            };
+            let connector = if is_last_call(i) { "└─" } else { "├─" };
             let style = if call.success {
                 Style::default()
                     .fg(Color::DarkGray)
@@ -656,6 +718,35 @@ fn render_tool_group<'a>(
                 ),
                 Span::styled(call.description.clone(), style),
             ]));
+
+            // Show tool output details below the description
+            if let Some(ref details) = call.details {
+                let continuation = if is_last_call(i) { "   " } else { "│  " };
+                let detail_style = Style::default().fg(Color::Rgb(90, 90, 90));
+                for detail_line in details.lines().take(30) {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("    {}  ", continuation),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(detail_line.to_string(), detail_style),
+                    ]));
+                }
+                // Indicate truncation if output is long
+                let line_count = details.lines().count();
+                if line_count > 30 {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("    {}  ", continuation),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(
+                            format!("... ({} more lines)", line_count - 30),
+                            Style::default().fg(Color::Rgb(120, 120, 120)).add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+            }
         }
     } else {
         // Collapsed: show only the last call (rolling wheel effect)

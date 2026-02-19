@@ -31,23 +31,13 @@ pub mod cli;
 pub mod config;
 pub mod db;
 pub mod error;
-pub mod llm;
 pub mod logging;
 pub mod memory;
 pub mod services;
 pub mod tui;
 pub mod utils;
 
-#[cfg(feature = "telegram")]
-pub mod telegram;
-#[cfg(feature = "whatsapp")]
-pub mod whatsapp;
-#[cfg(feature = "discord")]
-pub mod discord;
-#[cfg(feature = "slack")]
-pub mod slack;
 pub mod channels;
-pub mod voice;
 
 // Re-export commonly used types
 pub use error::{OpenCrabsError, ErrorCode};

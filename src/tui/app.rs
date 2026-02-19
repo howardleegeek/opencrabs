@@ -2,17 +2,19 @@
 //!
 //! Core state management for the terminal user interface.
 
-use super::events::{AppMode, EventHandler, ToolApprovalRequest, ToolApprovalResponse, TuiEvent};
+use super::events::{AppMode, EventHandler, SudoPasswordRequest, SudoPasswordResponse, ToolApprovalRequest, ToolApprovalResponse, TuiEvent};
 use super::onboarding::{OnboardingWizard, WizardAction};
 use super::plan::PlanDocument;
 use super::prompt_analyzer::PromptAnalyzer;
 use crate::brain::{BrainLoader, CommandLoader, SelfUpdater, UserCommand};
 use crate::db::models::{Message, Session};
-use crate::llm::agent::AgentService;
-use crate::llm::provider::{ContentBlock, LLMRequest};
+use crate::brain::agent::AgentService;
+use crate::brain::provider::{ContentBlock, LLMRequest};
 use crate::services::{MessageService, PlanService, ServiceContext, SessionService};
 use anyhow::Result;
+use ratatui::text::Line;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -309,6 +311,15 @@ pub struct App {
     /// Session to resume after restart (set via --session CLI arg)
     pub resume_session_id: Option<Uuid>,
 
+    /// Cache of rendered lines per message to avoid re-parsing markdown every frame.
+    /// Key: (message_id, content_width). Invalidated on terminal resize.
+    pub render_cache: HashMap<(Uuid, u16), Vec<Line<'static>>>,
+
+    /// Pending sudo password request (shown as inline dialog)
+    pub sudo_pending: Option<SudoPasswordRequest>,
+    /// Raw password text being typed (never displayed, only dots)
+    pub sudo_input: String,
+
     // Services
     agent_service: Arc<AgentService>,
     session_service: SessionService,
@@ -393,6 +404,9 @@ impl App {
             active_tool_group: None,
             rebuild_status: None,
             resume_session_id: None,
+            render_cache: HashMap::new(),
+            sudo_pending: None,
+            sudo_input: String::new(),
             session_service: SessionService::new(context.clone()),
             message_service: MessageService::new(context.clone()),
             plan_service: PlanService::new(context),
@@ -633,21 +647,49 @@ impl App {
             TuiEvent::ToolCallCompleted { tool_name, tool_input, success, summary } => {
                 let desc = Self::format_tool_description(&tool_name, &tool_input);
                 let details = if summary.is_empty() { None } else { Some(summary) };
-                let entry = ToolCallEntry { description: desc, success, details };
 
-                if let Some(ref mut group) = self.active_tool_group {
-                    group.calls.push(entry);
+                // Update the existing Started entry instead of pushing a duplicate.
+                // Match by description — the Started entry has the same desc but no details.
+                let updated = if let Some(ref mut group) = self.active_tool_group {
+                    if let Some(existing) = group.calls.iter_mut().rev()
+                        .find(|c| c.description == desc && c.details.is_none())
+                    {
+                        existing.success = success;
+                        existing.details = details.clone();
+                        true
+                    } else {
+                        false
+                    }
                 } else {
-                    self.active_tool_group = Some(ToolCallGroup {
-                        calls: vec![entry],
-                        expanded: false,
-                    });
+                    false
+                };
+
+                // Fallback: push as new entry if no matching Started entry found
+                if !updated {
+                    let entry = ToolCallEntry { description: desc, success, details };
+                    if let Some(ref mut group) = self.active_tool_group {
+                        group.calls.push(entry);
+                    } else {
+                        self.active_tool_group = Some(ToolCallGroup {
+                            calls: vec![entry],
+                            expanded: false,
+                        });
+                    }
                 }
                 if self.auto_scroll {
                     self.scroll_offset = 0;
                 }
             }
             TuiEvent::CompactionSummary(summary) => {
+                // Prune old display messages to prevent unbounded growth.
+                // Keep last N messages (mirrors agent compaction — TUI doesn't need
+                // to display messages the agent has already forgotten).
+                const MAX_DISPLAY_MESSAGES: usize = 500;
+                if self.messages.len() > MAX_DISPLAY_MESSAGES {
+                    let remove_count = self.messages.len() - MAX_DISPLAY_MESSAGES;
+                    self.messages.drain(..remove_count);
+                    self.render_cache.clear();
+                }
                 // Show the compaction summary as a system message in chat
                 self.messages.push(DisplayMessage {
                     id: Uuid::new_v4(),
@@ -682,14 +724,22 @@ impl App {
                     }
                 }
             }
+            TuiEvent::SudoPasswordRequested(request) => {
+                self.sudo_pending = Some(request);
+                self.sudo_input.clear();
+            }
             TuiEvent::SystemMessage(msg) => {
                 self.push_system_message(msg);
             }
             TuiEvent::FocusGained | TuiEvent::FocusLost => {
                 // Handled by the event loop for tick coalescing
             }
-            TuiEvent::Resize(_, _) | TuiEvent::AgentProcessing => {
-                // These are handled by the render loop
+            TuiEvent::Resize(_, _) => {
+                // Invalidate render cache on terminal resize (content width changes)
+                self.render_cache.clear();
+            }
+            TuiEvent::AgentProcessing => {
+                // Handled by the render loop
             }
         }
         Ok(())
@@ -699,6 +749,38 @@ impl App {
     async fn handle_key_event(&mut self, event: crossterm::event::KeyEvent) -> Result<()> {
         use super::events::keys;
         use crossterm::event::{KeyCode, KeyModifiers};
+
+        // Sudo password dialog intercepts all keys when active
+        if self.sudo_pending.is_some() {
+            match event.code {
+                KeyCode::Enter => {
+                    // Submit password
+                    if let Some(request) = self.sudo_pending.take() {
+                        let password = std::mem::take(&mut self.sudo_input);
+                        let _ = request.response_tx.send(SudoPasswordResponse {
+                            password: Some(password),
+                        });
+                    }
+                }
+                KeyCode::Esc => {
+                    // Cancel sudo
+                    if let Some(request) = self.sudo_pending.take() {
+                        let _ = request.response_tx.send(SudoPasswordResponse {
+                            password: None,
+                        });
+                    }
+                    self.sudo_input.clear();
+                }
+                KeyCode::Backspace => {
+                    self.sudo_input.pop();
+                }
+                KeyCode::Char(c) => {
+                    self.sudo_input.push(c);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
 
         // DEBUG: Log key events when in Plan mode
         if matches!(self.mode, AppMode::Plan) {
@@ -1444,15 +1526,22 @@ impl App {
                     Some("Press Esc again to clear input".to_string());
             }
         } else if event.code == KeyCode::Char('o') && event.modifiers == KeyModifiers::CONTROL {
-            // Ctrl+O — toggle expand/collapse on active tool group or most recent tool group/details
+            // Ctrl+O — toggle expand/collapse on ALL tool groups in the session
+            // Determine target state from the active group or most recent group
+            let target = if let Some(ref group) = self.active_tool_group {
+                !group.expanded
+            } else if let Some(msg) = self.messages.iter().rev()
+                .find(|m| m.tool_group.is_some()) {
+                !msg.tool_group.as_ref().unwrap().expanded
+            } else {
+                true
+            };
             if let Some(ref mut group) = self.active_tool_group {
-                group.expanded = !group.expanded;
-            } else if let Some(msg) = self.messages.iter_mut().rev()
-                .find(|m| m.tool_group.is_some() || m.details.is_some()) {
+                group.expanded = target;
+            }
+            for msg in self.messages.iter_mut() {
                 if let Some(ref mut group) = msg.tool_group {
-                    group.expanded = !group.expanded;
-                } else {
-                    msg.expanded = !msg.expanded;
+                    group.expanded = target;
                 }
             }
         } else if keys::is_page_up(&event) {
@@ -2099,10 +2188,10 @@ impl App {
     }
 
     /// Expand a DB message into one or more DisplayMessages.
-    /// Assistant messages may contain `<!-- tools: Read /foo | Edit /bar -->` markers
-    /// that get reconstructed into ToolCallGroup display messages.
+    /// Assistant messages may contain tool markers that get reconstructed into ToolCallGroup display messages.
+    /// Supports both v1 (`<!-- tools: desc1 | desc2 -->`) and v2 (`<!-- tools-v2: [JSON] -->`) formats.
     fn expand_message(msg: crate::db::models::Message) -> Vec<DisplayMessage> {
-        if msg.role != "assistant" || !msg.content.contains("<!-- tools:") {
+        if msg.role != "assistant" || !msg.content.contains("<!-- tools") {
             return vec![DisplayMessage::from(msg)];
         }
 
@@ -2114,12 +2203,24 @@ impl App {
         let content = msg.content;
 
         let mut result = Vec::new();
-        let marker = "<!-- tools:";
 
-        // Split on tool markers, preserving the structure
+        // Find the next tool marker (either v1 or v2)
+        fn find_next_marker(s: &str) -> Option<(usize, bool)> {
+            let v2_pos = s.find("<!-- tools-v2:");
+            let v1_pos = s.find("<!-- tools:");
+            match (v2_pos, v1_pos) {
+                (Some(v2), Some(v1)) => {
+                    if v2 <= v1 { Some((v2, true)) } else { Some((v1, false)) }
+                }
+                (Some(v2), None) => Some((v2, true)),
+                (None, Some(v1)) => Some((v1, false)),
+                (None, None) => None,
+            }
+        }
+
         let mut remaining = content.as_str();
         let mut first_text = true;
-        while let Some(marker_start) = remaining.find(marker) {
+        while let Some((marker_start, is_v2)) = find_next_marker(remaining) {
             // Text before marker
             let text_before = remaining[..marker_start].trim();
             if !text_before.is_empty() {
@@ -2140,18 +2241,36 @@ impl App {
                 first_text = false;
             }
 
-            // Parse the tool marker: <!-- tools: desc1 | desc2 -->
-            let after_marker = &remaining[marker_start + marker.len()..];
+            let marker_len = if is_v2 { "<!-- tools-v2:".len() } else { "<!-- tools:".len() };
+            let after_marker = &remaining[marker_start + marker_len..];
             if let Some(end) = after_marker.find("-->") {
                 let tools_str = after_marker[..end].trim();
-                let calls: Vec<ToolCallEntry> = tools_str
-                    .split(" | ")
-                    .map(|desc| ToolCallEntry {
-                        description: desc.to_string(),
-                        success: true,
-                        details: None,
-                    })
-                    .collect();
+
+                let calls: Vec<ToolCallEntry> = if is_v2 {
+                    // v2: parse JSON array with descriptions, success, and output
+                    serde_json::from_str::<Vec<serde_json::Value>>(tools_str)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|entry| {
+                            let desc = entry["d"].as_str().unwrap_or("?").to_string();
+                            let success = entry["s"].as_bool().unwrap_or(true);
+                            let output = entry["o"].as_str().map(|s| s.to_string())
+                                .filter(|s| !s.is_empty());
+                            ToolCallEntry { description: desc, success, details: output }
+                        })
+                        .collect()
+                } else {
+                    // v1: plain descriptions, no output
+                    tools_str
+                        .split(" | ")
+                        .map(|desc| ToolCallEntry {
+                            description: desc.to_string(),
+                            success: true,
+                            details: None,
+                        })
+                        .collect()
+                };
+
                 if !calls.is_empty() {
                     let count = calls.len();
                     result.push(DisplayMessage {
@@ -2475,7 +2594,7 @@ impl App {
     /// Complete the streaming response
     async fn complete_response(
         &mut self,
-        response: crate::llm::agent::AgentResponse,
+        response: crate::brain::agent::AgentResponse,
     ) -> Result<()> {
         self.is_processing = false;
         self.streaming_response = None;
@@ -3249,6 +3368,7 @@ impl App {
             tool_group: None,
             plan_approval: None,
         });
+        self.auto_scroll = true;
         self.scroll_offset = 0;
         tracing::info!("[APPROVAL] Pushed approval message for tool='{}', total messages={}, has_pending={}",
             self.messages.last().map(|m| m.approval.as_ref().map(|a| a.tool_name.as_str()).unwrap_or("?")).unwrap_or("?"),
@@ -3471,7 +3591,7 @@ impl App {
         // Build LLM request
         let request = LLMRequest::new(
             model,
-            vec![crate::llm::provider::Message::user(prompt)],
+            vec![crate::brain::provider::Message::user(prompt)],
         )
         .with_max_tokens(65536);
 

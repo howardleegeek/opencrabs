@@ -2,7 +2,7 @@
 //!
 //! Handles user input and application events for the terminal interface.
 
-use crate::llm::agent::AgentResponse;
+use crate::brain::agent::AgentResponse;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -88,6 +88,38 @@ pub enum TuiEvent {
 
     /// A system message to display in chat
     SystemMessage(String),
+
+    /// Sudo password requested by bash tool
+    SudoPasswordRequested(SudoPasswordRequest),
+}
+
+/// Sudo password request from the bash tool
+#[derive(Debug)]
+pub struct SudoPasswordRequest {
+    /// Unique ID for this request
+    pub request_id: Uuid,
+    /// The sudo command being run
+    pub command: String,
+    /// Channel to send password back
+    pub response_tx: mpsc::UnboundedSender<SudoPasswordResponse>,
+}
+
+// Manual Clone — response_tx is Clone-able (UnboundedSender)
+impl Clone for SudoPasswordRequest {
+    fn clone(&self) -> Self {
+        Self {
+            request_id: self.request_id,
+            command: self.command.clone(),
+            response_tx: self.response_tx.clone(),
+        }
+    }
+}
+
+/// Sudo password response from the TUI
+#[derive(Debug, Clone)]
+pub struct SudoPasswordResponse {
+    /// The password (None if cancelled by user)
+    pub password: Option<String>,
 }
 
 /// Tool approval request details
