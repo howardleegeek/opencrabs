@@ -60,6 +60,10 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "/rebuild",
         description: "Build & restart from source",
     },
+    SlashCommand {
+        name: "/whisper",
+        description: "Speak anywhere, paste to clipboard",
+    },
 ];
 
 /// Approval option selected by the user
@@ -677,6 +681,9 @@ impl App {
                         wizard.selected_model = 0;
                     }
                 }
+            }
+            TuiEvent::SystemMessage(msg) => {
+                self.push_system_message(msg);
             }
             TuiEvent::FocusGained | TuiEvent::FocusLost => {
                 // Handled by the event loop for tick coalescing
@@ -1936,6 +1943,42 @@ impl App {
                             let _ = sender.send(TuiEvent::Error(format!(
                                 "Cannot detect project: {}", e
                             )));
+                        }
+                    }
+                });
+                true
+            }
+            "/whisper" => {
+                self.push_system_message("Setting up WhisperCrabs...".to_string());
+                let sender = self.event_sender();
+                tokio::spawn(async move {
+                    match ensure_whispercrabs().await {
+                        Ok(binary_path) => {
+                            // Launch the binary (GTK handles if already running)
+                            match tokio::process::Command::new(&binary_path)
+                                .stdin(std::process::Stdio::null())
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .spawn()
+                            {
+                                Ok(_) => {
+                                    let _ = sender.send(TuiEvent::SystemMessage(
+                                        "WhisperCrabs is running! A floating mic button is now on your screen.\n\n\
+                                         Speak from any app — transcription is auto-copied to your clipboard. Just paste wherever you need.\n\n\
+                                         To change settings, right-click the button or just ask me here.".to_string()
+                                    ));
+                                }
+                                Err(e) => {
+                                    let _ = sender.send(TuiEvent::Error(
+                                        format!("Failed to launch WhisperCrabs: {}", e)
+                                    ));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = sender.send(TuiEvent::Error(
+                                format!("WhisperCrabs setup failed: {}", e)
+                            ));
                         }
                     }
                 });
@@ -3229,9 +3272,12 @@ impl App {
                 .collect();
 
             // User-defined commands: indices starting at SLASH_COMMANDS.len()
+            // Skip user commands that shadow a built-in name
             let base = SLASH_COMMANDS.len();
             for (i, ucmd) in self.user_commands.iter().enumerate() {
-                if ucmd.name.to_lowercase().starts_with(&prefix) {
+                if ucmd.name.to_lowercase().starts_with(&prefix)
+                    && !SLASH_COMMANDS.iter().any(|b| b.name == ucmd.name)
+                {
                     self.slash_filtered.push(base + i);
                 }
             }
@@ -3366,18 +3412,16 @@ impl App {
                     let api_key = if wizard.has_existing_key() {
                         let info = &super::onboarding::PROVIDERS[provider_idx];
                         let mut key = None;
-                        if !info.keyring_key.is_empty() {
-                            if let Some(s) = crate::config::secrets::SecretString::from_keyring_optional(info.keyring_key) {
+                        if !info.keyring_key.is_empty()
+                            && let Some(s) = crate::config::secrets::SecretString::from_keyring_optional(info.keyring_key) {
                                 key = Some(s.expose_secret().to_string());
-                            }
                         }
                         if key.is_none() {
                             for env_var in info.env_vars {
-                                if let Ok(val) = std::env::var(env_var) {
-                                    if !val.is_empty() {
+                                if let Ok(val) = std::env::var(env_var)
+                                    && !val.is_empty() {
                                         key = Some(val);
                                         break;
-                                    }
                                 }
                             }
                         }
@@ -3555,6 +3599,103 @@ impl App {
 
         Ok(())
     }
+}
+
+/// Download WhisperCrabs binary if not cached, return the path to the binary.
+async fn ensure_whispercrabs() -> Result<PathBuf> {
+    let bin_dir = crate::config::opencrabs_home().join("bin");
+    std::fs::create_dir_all(&bin_dir)?;
+
+    let binary_name = if cfg!(target_os = "windows") {
+        "whispercrabs.exe"
+    } else {
+        "whispercrabs"
+    };
+    let binary_path = bin_dir.join(binary_name);
+
+    if binary_path.exists() {
+        return Ok(binary_path);
+    }
+
+    // Detect platform
+    let (os_name, ext) = match std::env::consts::OS {
+        "linux" => ("linux", "tar.gz"),
+        "macos" => ("macos", "tar.gz"),
+        "windows" => ("windows", "zip"),
+        other => anyhow::bail!("Unsupported OS: {}", other),
+    };
+    let arch = std::env::consts::ARCH; // "x86_64" or "aarch64"
+
+    // Download latest release via GitHub API
+    let client = reqwest::Client::new();
+    let release_url = "https://api.github.com/repos/adolfousier/whispercrabs/releases/latest";
+    let release: serde_json::Value = client
+        .get(release_url)
+        .header("User-Agent", "opencrabs")
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    // Find matching asset
+    let pattern = format!("whispercrabs-{}-{}", os_name, arch);
+    let asset = release["assets"]
+        .as_array()
+        .and_then(|assets| {
+            assets
+                .iter()
+                .find(|a| a["name"].as_str().is_some_and(|n| n.contains(&pattern)))
+        })
+        .ok_or_else(|| anyhow::anyhow!("No release found for {}-{}", os_name, arch))?;
+
+    let download_url = asset["browser_download_url"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing download URL in release asset"))?;
+
+    // Download the archive
+    let bytes = client
+        .get(download_url)
+        .header("User-Agent", "opencrabs")
+        .send()
+        .await?
+        .bytes()
+        .await?;
+
+    // Extract (tar.gz for Linux/macOS, zip for Windows)
+    let tmp = bin_dir.join("whispercrabs_download");
+    std::fs::write(&tmp, &bytes)?;
+
+    if ext == "tar.gz" {
+        let output = tokio::process::Command::new("tar")
+            .args([
+                "xzf",
+                &tmp.to_string_lossy(),
+                "-C",
+                &bin_dir.to_string_lossy(),
+            ])
+            .output()
+            .await?;
+        if !output.status.success() {
+            let _ = std::fs::remove_file(&tmp);
+            anyhow::bail!("Failed to extract archive");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&tmp);
+
+    if !binary_path.exists() {
+        anyhow::bail!(
+            "Binary not found after extraction — archive may use a different layout"
+        );
+    }
+
+    Ok(binary_path)
 }
 
 #[cfg(test)]

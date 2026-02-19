@@ -99,15 +99,20 @@ pub(super) fn embed_content(store: &Mutex<Store>, body: &str) {
     let title = Store::extract_title(body);
     let hash = Store::hash_content(body);
 
-    // Engine lock → embed → release
+    // Engine lock → embed → release (suppress llama.cpp stderr spam)
     let emb = match engine_mutex.lock() {
-        Ok(mut engine) => match engine.embed_document(body, Some(&title)) {
-            Ok(emb) => emb,
-            Err(e) => {
-                tracing::debug!("Embedding failed: {e}");
-                return;
+        Ok(mut engine) => {
+            let saved = suppress_stderr();
+            let result = engine.embed_document(body, Some(&title));
+            restore_stderr(saved);
+            match result {
+                Ok(emb) => emb,
+                Err(e) => {
+                    tracing::debug!("Embedding failed: {e}");
+                    return;
+                }
             }
-        },
+        }
         Err(_) => return,
     };
 
@@ -156,13 +161,14 @@ pub(super) fn backfill_embeddings(store: &Mutex<Store>) {
         })
         .collect();
 
-    // Engine lock: batch embed → release
+    // Engine lock: batch embed → release (suppress llama.cpp stderr spam)
     let results: Vec<_> = {
         let mut engine = match engine_mutex.lock() {
             Ok(e) => e,
             Err(_) => return,
         };
-        engine
+        let saved = suppress_stderr();
+        let out = engine
             .embed_batch_with_progress(&items, |done, total| {
                 if done % 10 == 0 || done == total {
                     tracing::debug!("Embedding progress: {done}/{total}");
@@ -170,7 +176,9 @@ pub(super) fn backfill_embeddings(store: &Mutex<Store>) {
             })
             .into_iter()
             .map(|r| r.ok())
-            .collect()
+            .collect();
+        restore_stderr(saved);
+        out
     };
 
     // Store lock: insert all embeddings → release

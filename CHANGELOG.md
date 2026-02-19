@@ -5,6 +5,24 @@ All notable changes to OpenCrab will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.20] - 2026-02-19
+
+### Added
+- **`/whisper` Command** — One-command setup for system-wide voice-to-text. Auto-downloads WhisperCrabs binary, launches floating mic button. Speak from any app, transcription auto-copies to clipboard
+- **`SystemMessage` Event** — New TUI event variant for async tasks to push messages into chat
+
+### Fixed
+- **Embedding Stderr Bleed** — Suppressed llama.cpp C-level stderr during `embed_document()` and `embed_batch_with_progress()`, not just model load. Fixes garbled TUI output during memory indexing
+- **Slash Autocomplete Dedup** — User-defined commands that shadow built-in names no longer show twice in autocomplete dropdown
+- **Slash Autocomplete Width** — Dropdown auto-sizes to fit content instead of hardcoded 40 chars. Added inner padding on all sides
+- **Help Screen** — Added missing `/rebuild` and `/whisper` to `/help` slash commands list
+- **Cleartext Logging (CodeQL)** — Removed all `println!` calls from provider factory that wrote to stdout (corrupts TUI). Kept `tracing::info!` for structured logging
+- **Stray Print Statements** — Removed debug `println!` from wacore encoder, replaced `eprintln!` in onboarding tests with silent returns
+
+### Changed
+- **Docker Files Relocated** — Moved `docker/` from project root to `src/docker/`, updated all references in README and compose.yml
+- **Clippy Clean** — Fixed collapsible_if warnings in onboarding and app, `map_or` → `is_some_and`
+
 ## [0.2.19] - 2026-02-18
 
 ### Changed

@@ -85,6 +85,9 @@ pub enum TuiEvent {
 
     /// Onboarding wizard received fetched model list from provider API
     OnboardingModelsFetched(Vec<String>),
+
+    /// A system message to display in chat
+    SystemMessage(String),
 }
 
 /// Tool approval request details

@@ -2,7 +2,7 @@ services:
   opencrabs:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: src/docker/Dockerfile
     container_name: opencrabs
     restart: unless-stopped
     # Load .env from project root if it exists (optional — onboarding wizard works without it)

@@ -233,10 +233,10 @@ cd opencrabs
 
 # Option A: With .env file (auto-loaded)
 cp .env.example .env   # add your API keys
-docker compose -f docker/compose.yml up --build
+docker compose -f src/docker/compose.yml up --build
 
 # Option B: No .env — onboarding wizard handles setup interactively
-docker compose -f docker/compose.yml run opencrabs
+docker compose -f src/docker/compose.yml run opencrabs
 ```
 
 Config, workspace, and memory DB persist in a Docker volume across restarts. Keys are passed via environment — never baked into the image.

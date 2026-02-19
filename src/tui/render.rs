@@ -259,16 +259,6 @@ fn char_boundary_at_width_from_end(s: &str, target_width: usize) -> usize {
 fn render_chat(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
-    // Get the model name: session model → provider default → "AI"
-    let model_name = app
-        .current_session
-        .as_ref()
-        .and_then(|s| s.model.as_deref())
-        .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| {
-            if app.default_model_name.is_empty() { "AI" } else { &app.default_model_name }
-        });
-
     let content_width = area.width.saturating_sub(2) as usize; // borders
 
     for msg in &app.messages {
@@ -1012,9 +1002,23 @@ fn render_slash_autocomplete(f: &mut Frame, app: &App, input_area: Rect) {
         return;
     }
 
-    // Position dropdown above the input box
-    let height = count + 2; // +2 for borders
-    let width = 40u16.min(input_area.width);
+    // Position dropdown above the input box, auto-sized to fit content
+    // Padding: 1 char each side (left/right inside border), 1 empty line top/bottom
+    let pad_x: u16 = 1;
+    let pad_y: u16 = 1;
+    let height = count + 2 + pad_y * 2; // +2 for borders, +2 for top/bottom padding
+    let max_content_width = app
+        .slash_filtered
+        .iter()
+        .map(|&idx| {
+            let desc = app.slash_command_description(idx).unwrap_or("");
+            // pad + " " + 10-char name + " " + desc + " " + pad
+            pad_x + 1 + 10 + 1 + desc.len() as u16 + 1 + pad_x
+        })
+        .max()
+        .unwrap_or(40);
+    // +2 for borders
+    let width = (max_content_width + 2).max(40).min(input_area.width);
     let dropdown_area = Rect {
         x: input_area.x + 1,
         y: input_area.y.saturating_sub(height),
@@ -1050,15 +1054,21 @@ fn render_slash_autocomplete(f: &mut Frame, app: &App, input_area: Rect) {
             };
 
             Line::from(vec![
-                Span::styled(format!(" {:<10}", name), style),
-                Span::styled(format!(" {}", desc), desc_style),
+                Span::styled(format!("  {:<10}", name), style),
+                Span::styled(format!(" {} ", desc), desc_style),
             ])
         })
         .collect();
 
+    // Wrap with empty lines for top/bottom padding
+    let mut padded_lines = Vec::with_capacity(lines.len() + 2);
+    padded_lines.push(Line::from(""));
+    padded_lines.extend(lines);
+    padded_lines.push(Line::from(""));
+
     // Clear the area and render the dropdown
     f.render_widget(Clear, dropdown_area);
-    let dropdown = Paragraph::new(lines).block(
+    let dropdown = Paragraph::new(padded_lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Rgb(70, 130, 180))),
@@ -1283,6 +1293,8 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
         kv("/sessions", "Session manager", blue),
         kv("/approve", "Tool approval policy", blue),
         kv("/compact", "Compact context now", blue),
+        kv("/rebuild", "Build & restart from source", blue),
+        kv("/whisper", "Speak anywhere, paste to clipboard", blue),
         Line::from(""),
         Line::from(""),
         Line::from(vec![

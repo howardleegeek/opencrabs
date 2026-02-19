@@ -34,6 +34,15 @@
 **Fix:** Clear state files (session JSON, update offsets, temp files), restart clean.
 **Rule:** When debugging silent failures, always check for state files first.
 
+### Tool Approval Failures
+**Pattern:** Tool call (bash, write, etc.) fails, times out, or user says "it didn't show up to approve" or "changes weren't applied."
+**Rules:**
+1. **Never hallucinate success.** If a tool result came back as error/denied/timeout, say so explicitly.
+2. **Verify before claiming done.** After any write/bash tool, run a follow-up check (`git status`, `cat file`, `ls`) to confirm the change actually landed.
+3. **Re-attempt if denied.** The user may have missed the approval prompt. Ask "Want me to try again? Watch for the approval dialog." and re-fire.
+4. **If approval keeps timing out**, tell the user: "The approval dialog may not be rendering. Try `/approve` to check your approval policy, or restart the session."
+5. **Never skip verification.** A tool call that returned no output or an error is NOT a success — investigate before moving on.
+
 ## Lessons Learned
 *(Add hard-won knowledge here)*
 - **Don't give up too early** — dig deeper before declaring something unfixable

@@ -2053,20 +2053,18 @@ pub async fn fetch_provider_models(provider_index: usize, api_key: Option<&str>)
         1 => {
             // OpenAI — /v1/models
             let mut req = client.get("https://api.openai.com/v1/models");
-            if let Some(key) = api_key {
-                if !key.is_empty() {
+            if let Some(key) = api_key
+                && !key.is_empty() {
                     req = req.header("Authorization", format!("Bearer {}", key));
-                }
             }
             req.send().await
         }
         4 => {
             // OpenRouter — /api/v1/models
             let mut req = client.get("https://openrouter.ai/api/v1/models");
-            if let Some(key) = api_key {
-                if !key.is_empty() {
+            if let Some(key) = api_key
+                && !key.is_empty() {
                     req = req.header("Authorization", format!("Bearer {}", key));
-                }
             }
             req.send().await
         }
@@ -2495,7 +2493,7 @@ mod tests {
     fn test_fetch_anthropic_models_with_api_key() {
         let key = match std::env::var("ANTHROPIC_API_KEY") {
             Ok(k) if !k.is_empty() => k,
-            _ => { eprintln!("ANTHROPIC_API_KEY not set, skipping"); return; }
+            _ => return, // ANTHROPIC_API_KEY not set, skip
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let models = rt.block_on(fetch_provider_models(0, Some(&key)));
@@ -2508,7 +2506,7 @@ mod tests {
     fn test_fetch_anthropic_models_with_setup_token() {
         let key = match std::env::var("ANTHROPIC_MAX_SETUP_TOKEN") {
             Ok(k) if !k.is_empty() && k.starts_with("sk-ant-oat") => k,
-            _ => { eprintln!("ANTHROPIC_MAX_SETUP_TOKEN not set, skipping"); return; }
+            _ => return, // ANTHROPIC_MAX_SETUP_TOKEN not set, skip
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let models = rt.block_on(fetch_provider_models(0, Some(&key)));
@@ -2520,7 +2518,7 @@ mod tests {
     fn test_fetch_openai_models_with_api_key() {
         let key = match std::env::var("OPENAI_API_KEY") {
             Ok(k) if !k.is_empty() => k,
-            _ => { eprintln!("OPENAI_API_KEY not set, skipping"); return; }
+            _ => return, // OPENAI_API_KEY not set, skip
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let models = rt.block_on(fetch_provider_models(1, Some(&key)));
@@ -2532,7 +2530,7 @@ mod tests {
     fn test_fetch_openrouter_models_with_api_key() {
         let key = match std::env::var("OPENROUTER_API_KEY") {
             Ok(k) if !k.is_empty() => k,
-            _ => { eprintln!("OPENROUTER_API_KEY not set, skipping"); return; }
+            _ => return, // OPENROUTER_API_KEY not set, skip
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let models = rt.block_on(fetch_provider_models(4, Some(&key)));

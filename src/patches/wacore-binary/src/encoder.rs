@@ -571,7 +571,6 @@ mod tests {
         // According to WhatsApp web protocol:
         // Empty string should be encoded as BINARY_8 (252) + 0
         // NOT as token 0 (LIST_EMPTY)
-        println!("Empty string encoding: {:?}", &buffer[1..]);
         assert_eq!(
             buffer.len(),
             3,

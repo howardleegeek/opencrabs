@@ -7,7 +7,7 @@ use super::onboarding::{
     OnboardingWizard, SlackField, TelegramField, VoiceField, WizardMode, PROVIDERS,
 };
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Flex, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -23,28 +23,7 @@ const ACCENT_GOLD: Color = Color::Rgb(184, 134, 11);
 pub fn render_onboarding(f: &mut Frame, wizard: &OnboardingWizard) {
     let area = f.area();
 
-    // Center the wizard content
-    let v_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(28.min(area.height.saturating_sub(2))),
-            Constraint::Min(0),
-        ])
-        .split(area);
-
-    let h_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(60.min(area.width.saturating_sub(2))),
-            Constraint::Min(0),
-        ])
-        .split(v_chunks[1]);
-
-    let wizard_area = h_chunks[1];
-
-    // Build wizard content — use 'static lines by converting all wizard data to owned strings
+    // Build wizard content FIRST so we know the actual height
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Header
@@ -131,6 +110,51 @@ pub fn render_onboarding(f: &mut Frame, wizard: &OnboardingWizard) {
         lines.push(Line::from(footer));
     }
 
+    // Add bottom padding to match the top empty line
+    lines.push(Line::from(""));
+
+    // Calculate actual content height: lines + 2 for top/bottom border
+    let content_height = (lines.len() as u16).saturating_add(2);
+    // Clamp to available area
+    let box_height = content_height.min(area.height.saturating_sub(2));
+    let box_width = 64u16.min(area.width.saturating_sub(4));
+    let inner_width = box_width.saturating_sub(2) as usize; // inside borders
+
+    // Center each line manually within the box using space padding
+    let centered_lines: Vec<Line<'static>> = lines
+        .into_iter()
+        .map(|line| {
+            // Calculate the display width of the line
+            let line_width: usize = line.spans.iter().map(|s| {
+                use unicode_width::UnicodeWidthStr;
+                s.content.width()
+            }).sum();
+            if line_width >= inner_width || line_width == 0 {
+                line // too wide or empty, leave as-is
+            } else {
+                let pad = (inner_width - line_width) / 2;
+                let mut spans = vec![Span::raw(" ".repeat(pad))];
+                spans.extend(line.spans);
+                Line::from(spans)
+            }
+        })
+        .collect();
+
+    // Center the wizard box on screen using Flex::Center
+    let v_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .flex(Flex::Center)
+        .constraints([Constraint::Length(box_height)])
+        .split(area);
+
+    let h_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .flex(Flex::Center)
+        .constraints([Constraint::Length(box_width)])
+        .split(v_chunks[0]);
+
+    let wizard_area = h_chunks[0];
+
     let title_string = if step == OnboardingStep::Complete {
         " OpenCrabs Setup Complete ".to_string()
     } else {
@@ -141,7 +165,7 @@ pub fn render_onboarding(f: &mut Frame, wizard: &OnboardingWizard) {
         )
     };
 
-    let paragraph = Paragraph::new(lines)
+    let paragraph = Paragraph::new(centered_lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -153,7 +177,7 @@ pub fn render_onboarding(f: &mut Frame, wizard: &OnboardingWizard) {
                         .add_modifier(Modifier::BOLD),
                 )),
         )
-        .alignment(Alignment::Center)
+        .alignment(Alignment::Left)
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, wizard_area);

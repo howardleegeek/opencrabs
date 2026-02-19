@@ -38,6 +38,34 @@ Things like:
 - **Path tip:** Always run `echo $HOME` or `ls ~/.opencrabs/` first to confirm the resolved path before file operations.
 - **Env files:** `~/.opencrabs/.env` — chmod 600 (owner-only read)
 
+## Integrations
+
+### Channel Connections
+OpenCrabs can connect to messaging platforms. Configure in `~/.opencrabs/config.toml`:
+
+- **Telegram** — Create a bot via @BotFather, add token to config `[channels.telegram]`
+- **Discord** — Create a bot at discord.com/developers (enable MESSAGE CONTENT intent), add token to config `[channels.discord]`
+- **WhatsApp** — Link via QR code pairing, configure `[channels.whatsapp]` with allowed phone numbers
+- **Slack** — Create an app at api.slack.com/apps (enable Socket Mode), add tokens to config `[channels.slack]`
+
+API keys and tokens go in `~/.opencrabs/.env` (chmod 600). Channel settings go in `config.toml`.
+
+### WhisperCrabs — Voice-to-Text (D-Bus)
+[WhisperCrabs](https://github.com/adolfousier/whispercrabs) is a floating voice-to-text tool. Fully controllable via D-Bus.
+
+**What it does:** Click to record → click to stop → transcribes → text copied to clipboard. Sound plays when ready.
+
+**D-Bus control (full access):**
+- Start/stop recording
+- Switch between local (whisper.cpp) and API transcription
+- Set API keys and endpoint URLs
+- View transcription history
+- Trigger settings dialog
+
+**Setup:** Download binary, launch, configure via right-click menu or D-Bus commands.
+
+**As an OpenCrabs tool:** When user asks to transcribe voice or set up voice input, use D-Bus to control WhisperCrabs — check if running, start recording, configure provider, etc.
+
 ## Why Separate?
 
 Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.

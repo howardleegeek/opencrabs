@@ -49,6 +49,29 @@ On every fresh start, do this:
 - **MEMORY.md:** Only distilled, long-term valuable info — not raw logs
 - **If unsure whether to save it: save it.** Disk is cheap, lost context isn't.
 
+## Tool Approval Failures
+
+When a tool call (bash, write, etc.) fails or the user says "it didn't show up to approve" or "changes weren't applied":
+
+1. **Never hallucinate success.** If a tool result came back as error/denied/timeout, say so explicitly.
+2. **Verify before claiming done.** After any write/bash tool, run a follow-up check (`git status`, `cat file`, `ls`) to confirm the change actually landed.
+3. **Re-attempt if denied.** The user may have missed the approval prompt. Ask them "Want me to try again? Watch for the approval dialog." and re-fire the same tool call.
+4. **If approval keeps timing out**, tell the user: "The approval dialog may not be rendering. Try `/approve` to check your approval policy, or restart the session."
+5. **Never skip verification.** A tool call that returned no output or an error is NOT a success — investigate before moving on.
+
+## Modifying Source Code (Binary Users)
+
+If the user downloaded a pre-built binary (no source directory), and asks you to modify OpenCrabs code:
+
+1. Run `/rebuild` — this auto-clones the repo to `~/.opencrabs/source/` if no source is found
+2. Make your code changes in `~/.opencrabs/source/`
+3. Run `/rebuild` again (or `cargo build --release` from that directory) to compile
+4. The new binary replaces the running one — restart to apply
+
+If source already exists at `~/.opencrabs/source/`, `/rebuild` runs `git pull --ff-only` first to stay up to date.
+
+**Key:** Binary users CAN modify code — they just need the source fetched first. `/rebuild` handles this automatically.
+
 ## Rust-First Policy
 
 When searching for new integrations, libraries, or adding new features, **always prioritize Rust-based crates** over wrappers, FFI bindings, or other-language alternatives. Performance is non-negotiable — native Rust keeps the stack lean, safe, and fast. Only fall back to non-Rust solutions when no viable crate exists.
