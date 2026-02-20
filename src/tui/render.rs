@@ -2156,8 +2156,14 @@ fn render_model_selector(f: &mut Frame, app: &App, area: Rect) {
     let focused_field = app.model_selector_focused_field; // 0=provider, 1=api_key, 2=model
     let provider_idx = app.model_selector_provider_selected;
     let selected_provider = &PROVIDERS[provider_idx];
-    let provider_models: Vec<&str> = selected_provider.models.iter().map(|s| s.as_ref()).collect();
-    let model_count = provider_models.len();
+    
+    // Use fetched models if available, otherwise fall back to static list
+    let display_models: Vec<&str> = if app.model_selector_models.is_empty() {
+        selected_provider.models.iter().map(|s| s.as_ref()).collect()
+    } else {
+        app.model_selector_models.iter().map(|s| s.as_ref()).collect()
+    };
+    let model_count = display_models.len();
     let current_model = app
         .current_session
         .as_ref()
@@ -2254,7 +2260,7 @@ fn render_model_selector(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let total = provider_models.len();
+    let total = display_models.len();
     let (start, end) = if total <= MAX_VISIBLE_MODELS {
         (0, total)
     } else {
@@ -2271,7 +2277,7 @@ fn render_model_selector(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    for (offset, model) in provider_models[start..end].iter().enumerate() {
+    for (offset, model) in display_models[start..end].iter().enumerate() {
         let i = start + offset;
         let selected = i == app.model_selector_selected;
         let active = *model == current_model;

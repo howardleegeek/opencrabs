@@ -3803,7 +3803,31 @@ impl App {
                 // After saving, switch to model selection field
                 self.model_selector_focused_field = 2;
             } else if self.model_selector_focused_field == 1 {
-                // On API key field - switch to model field (models will show from selected provider)
+                // On API key field - save key, fetch models, switch to model field
+                let provider_idx = self.model_selector_provider_selected;
+                let provider = &PROVIDERS[provider_idx];
+                let api_key = if self.model_selector_api_key.is_empty() {
+                    None
+                } else {
+                    Some(self.model_selector_api_key.clone())
+                };
+                
+                // Save API key to keyring if provided
+                if let Some(ref key) = api_key
+                    && !provider.keyring_key.is_empty()
+                {
+                    let secret = crate::config::SecretString::from_str(key);
+                    let _ = secret.save_to_keyring(provider.keyring_key);
+                }
+                
+                // Save provider config first
+                self.save_provider_selection(provider_idx).await?;
+                
+                // Fetch live models from the provider
+                self.model_selector_models = super::onboarding::fetch_provider_models(provider_idx, api_key.as_deref()).await;
+                self.model_selector_selected = 0;
+                
+                // Switch to model selection field
                 self.model_selector_focused_field = 2;
             } else {
                 // On model field - save and close
