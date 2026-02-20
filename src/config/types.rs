@@ -553,15 +553,17 @@ impl Config {
             config.voice.groq_api_key = Some(groq_key);
         }
 
-        // Provider API keys from environment
+        // Provider API keys from environment (only for API keys, not models)
+        // Config.toml is the source of truth for all settings including models
         Self::load_provider_api_keys(&mut config)?;
 
         Ok(config)
     }
 
     /// Load provider API keys from environment variables
+    /// Note: Models are NOT loaded from env - config.toml is the source of truth
     fn load_provider_api_keys(config: &mut Self) -> Result<()> {
-        // Anthropic
+        // Anthropic - API key only (no model override from env)
         // ANTHROPIC_MAX_SETUP_TOKEN takes priority over ANTHROPIC_API_KEY (OAuth token for Claude Max)
         if let Ok(api_key) = std::env::var("ANTHROPIC_MAX_SETUP_TOKEN")
             .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
@@ -573,21 +575,6 @@ impl Config {
                 default_model: None,
             });
             provider.api_key = Some(api_key);
-        }
-
-        // ANTHROPIC_MAX_MODEL sets the default model for Anthropic
-        // Only applies if config.toml doesn't already have a default_model set
-        // (user's explicit model selection in config.toml takes priority)
-        if let Ok(model) = std::env::var("ANTHROPIC_MAX_MODEL") {
-            let provider = config.providers.anthropic.get_or_insert(ProviderConfig {
-                enabled: true,
-                api_key: None,
-                base_url: None,
-                default_model: None,
-            });
-            if provider.default_model.is_none() {
-                provider.default_model = Some(model);
-            }
         }
 
         // OpenAI — ONLY set api_key on an EXISTING provider config.

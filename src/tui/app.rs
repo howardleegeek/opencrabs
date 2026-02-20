@@ -521,10 +521,37 @@ impl App {
     /// Rebuild agent service with a new provider
     pub async fn rebuild_agent_service(&mut self) -> Result<()> {
         use crate::brain::provider::create_provider;
+        use crate::config::secrets::SecretString;
         
         // Load config
-        let config = crate::config::Config::load()
+        let mut config = crate::config::Config::load()
             .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
+        
+        // Load API keys from keyring for each provider
+        if let Some(ref mut p) = config.providers.anthropic
+            && p.api_key.is_none()
+            && let Some(secret) = SecretString::from_keyring_optional("anthropic_api_key")
+        {
+            p.api_key = Some(secret.expose_secret().to_string());
+        }
+        if let Some(ref mut p) = config.providers.openai
+            && p.api_key.is_none()
+            && let Some(secret) = SecretString::from_keyring_optional("openai_api_key")
+        {
+            p.api_key = Some(secret.expose_secret().to_string());
+        }
+        if let Some(ref mut p) = config.providers.gemini
+            && p.api_key.is_none()
+            && let Some(secret) = SecretString::from_keyring_optional("gemini_api_key")
+        {
+            p.api_key = Some(secret.expose_secret().to_string());
+        }
+        if let Some(ref mut p) = config.providers.qwen
+            && p.api_key.is_none()
+            && let Some(secret) = SecretString::from_keyring_optional("dashscope_api_key")
+        {
+            p.api_key = Some(secret.expose_secret().to_string());
+        }
         
         // Create new provider from config
         let provider = create_provider(&config)
