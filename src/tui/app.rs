@@ -3799,8 +3799,11 @@ impl App {
         if keys::is_enter(&event) {
             if self.model_selector_focused_field == 0 {
                 // On provider field - save config, move to API key field
-                self.save_provider_selection(self.model_selector_provider_selected).await?;
-                self.model_selector_focused_field = 1;
+                if let Err(e) = self.save_provider_selection(self.model_selector_provider_selected).await {
+                    self.push_system_message(format!("Error: {}", e));
+                } else {
+                    self.model_selector_focused_field = 1;
+                }
             } else if self.model_selector_focused_field == 1 {
                 // On API key field - fetch models from provider, move to model selection
                 let provider_idx = self.model_selector_provider_selected;
@@ -3820,16 +3823,18 @@ impl App {
                 }
                 
                 // Save provider config
-                self.save_provider_selection(provider_idx).await?;
-                
-                // Fetch live models from the provider
-                self.model_selector_models = super::onboarding::fetch_provider_models(provider_idx, api_key.as_deref()).await;
-                self.model_selector_selected = 0;
-                
-                // Move to model selection field
-                self.model_selector_focused_field = 2;
+                if let Err(e) = self.save_provider_selection(provider_idx).await {
+                    self.push_system_message(format!("Error: {}", e));
+                } else {
+                    // Fetch live models from the provider
+                    self.model_selector_models = super::onboarding::fetch_provider_models(provider_idx, api_key.as_deref()).await;
+                    self.model_selector_selected = 0;
+                    
+                    // Move to model selection field
+                    self.model_selector_focused_field = 2;
+                }
             } else {
-                // On model field - save and close
+                // On model field - save and close (this one CAN close)
                 self.save_provider_selection(self.model_selector_provider_selected).await?;
             }
         }
