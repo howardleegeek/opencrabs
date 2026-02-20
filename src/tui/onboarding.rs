@@ -456,6 +456,89 @@ impl OnboardingWizard {
         }
     }
 
+    /// Create a wizard with existing config.toml values as defaults
+    pub fn from_config(config: &Config) -> Self {
+        let mut wizard = Self::new();
+
+        // Determine which provider is configured and set selected_provider
+        // Priority: Qwen > Anthropic > OpenAI > Gemini > OpenRouter > Custom
+        if config.providers.qwen.as_ref().is_some_and(|p| p.enabled) {
+            wizard.selected_provider = 3; // Qwen/DashScope
+            if let Some(model) = &config.providers.qwen.as_ref().and_then(|p| p.default_model.clone())
+                && let Some(idx) = wizard.current_provider().models.iter().position(|m| m == model)
+            {
+                wizard.selected_model = idx;
+            }
+            if let Some(base_url) = &config.providers.qwen.as_ref().and_then(|p| p.base_url.clone()) {
+                wizard.custom_base_url = base_url.clone();
+            }
+        } else if config.providers.anthropic.as_ref().is_some_and(|p| p.enabled) {
+            wizard.selected_provider = 0; // Anthropic
+            if let Some(model) = &config.providers.anthropic.as_ref().and_then(|p| p.default_model.clone())
+                && let Some(idx) = wizard.current_provider().models.iter().position(|m| m == model)
+            {
+                wizard.selected_model = idx;
+            }
+        } else if config.providers.openai.as_ref().is_some_and(|p| p.enabled) {
+            // Check if it's OpenRouter (has openrouter base URL) or regular OpenAI or custom
+            if let Some(base_url) = &config.providers.openai.as_ref().and_then(|p| p.base_url.clone()) {
+                if base_url.contains("openrouter") {
+                    wizard.selected_provider = 4; // OpenRouter
+                } else {
+                    wizard.selected_provider = 5; // Custom OpenAI-compatible
+                    wizard.custom_base_url = base_url.clone();
+                }
+            } else {
+                wizard.selected_provider = 1; // OpenAI
+            }
+            if let Some(model) = &config.providers.openai.as_ref().and_then(|p| p.default_model.clone()) {
+                wizard.custom_model = model.clone();
+                if let Some(idx) = wizard.current_provider().models.iter().position(|m| m == model) {
+                    wizard.selected_model = idx;
+                }
+            }
+        } else if config.providers.gemini.as_ref().is_some_and(|p| p.enabled) {
+            wizard.selected_provider = 2; // Gemini
+            if let Some(model) = &config.providers.gemini.as_ref().and_then(|p| p.default_model.clone())
+                && let Some(idx) = wizard.current_provider().models.iter().position(|m| m == model)
+            {
+                wizard.selected_model = idx;
+            }
+        }
+
+        // Detect if we have an existing API key for the selected provider
+        wizard.detect_existing_key();
+
+        // Load gateway settings
+        wizard.gateway_port = config.gateway.port.to_string();
+        wizard.gateway_bind = config.gateway.bind.clone();
+        wizard.gateway_auth = if config.gateway.auth_mode == "none" { 1 } else { 0 };
+
+        // Load channel toggles
+        wizard.channel_toggles[0].1 = config.channels.telegram.enabled;
+        wizard.channel_toggles[1].1 = config.channels.discord.enabled;
+        wizard.channel_toggles[2].1 = config.channels.whatsapp.enabled;
+        wizard.channel_toggles[3].1 = config.channels.signal.enabled;
+        wizard.channel_toggles[4].1 = config.channels.google_chat.enabled;
+        wizard.channel_toggles[5].1 = config.channels.imessage.enabled;
+
+        // Also sync to messaging toggles for UI
+        wizard.messaging_telegram = config.channels.telegram.enabled;
+        wizard.messaging_discord = config.channels.discord.enabled;
+        wizard.messaging_whatsapp = config.channels.whatsapp.enabled;
+        wizard.messaging_slack = config.channels.slack.enabled;
+
+        // Load voice settings
+        wizard.tts_enabled = config.voice.tts_enabled;
+        wizard.detect_existing_groq_key();
+
+        // Jump directly to provider auth step since config exists
+        wizard.step = OnboardingStep::ProviderAuth;
+        wizard.auth_field = AuthField::Provider;
+
+        wizard
+    }
+
     /// Get provider info for currently selected provider
     pub fn current_provider(&self) -> &ProviderInfo {
         &PROVIDERS[self.selected_provider]
@@ -1649,8 +1732,10 @@ Respond with EXACTLY six sections using these delimiters. No extra text before t
     }
 
     /// Apply wizard configuration — creates config.toml, stores API key, seeds workspace
+    /// Merges with existing config to preserve settings not modified in wizard
     pub fn apply_config(&self) -> Result<(), String> {
-        let mut config = Config::default();
+        // Load existing config first to preserve other settings
+        let mut config = Config::load().unwrap_or_default();
 
         // Provider config (indices match PROVIDERS array:
         // 0=Anthropic, 1=OpenAI, 2=Gemini, 3=Qwen, 4=OpenRouter, 5=Custom)

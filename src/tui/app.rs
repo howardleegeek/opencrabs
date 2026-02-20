@@ -277,6 +277,10 @@ pub struct App {
     // Model selector state
     pub model_selector_models: Vec<String>,
     pub model_selector_selected: usize,
+    pub model_selector_showing_providers: bool,
+    pub model_selector_provider_selected: usize,
+    pub model_selector_api_key: String,
+    pub model_selector_base_url: String,
 
     // Input history (arrow up/down to cycle through past messages)
     input_history: Vec<String>,
@@ -398,6 +402,10 @@ impl App {
             session_rename_buffer: String::new(),
             model_selector_models: Vec::new(),
             model_selector_selected: 0,
+            model_selector_showing_providers: false,
+            model_selector_provider_selected: 0,
+            model_selector_api_key: String::new(),
+            model_selector_base_url: String::new(),
             input_history: Self::load_history(),
             input_history_index: None,
             input_history_stash: String::new(),
@@ -508,6 +516,42 @@ impl App {
     pub fn set_agent_service(&mut self, agent_service: Arc<AgentService>) {
         self.default_model_name = agent_service.provider_model().to_string();
         self.agent_service = agent_service;
+    }
+
+    /// Rebuild agent service with a new provider
+    pub async fn rebuild_agent_service(&mut self) -> Result<()> {
+        use crate::brain::provider::create_provider;
+        
+        // Load config
+        let config = crate::config::Config::load()
+            .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
+        
+        // Create new provider from config
+        let provider = create_provider(&config)
+            .map_err(|e| anyhow::anyhow!("Failed to create provider: {}", e))?;
+        
+        // Get existing context from current agent service
+        let context = self.agent_service.context().clone();
+        
+        // Get existing tool registry from current agent service
+        let tool_registry = self.agent_service.tool_registry().clone();
+        
+        // Create new agent service with new provider
+        let new_agent_service = Arc::new(AgentService::new(
+            provider,
+            context,
+        ).with_tool_registry(tool_registry));
+        
+        // Update app state
+        self.default_model_name = new_agent_service.provider_model().to_string();
+        self.agent_service = new_agent_service;
+        
+        Ok(())
+    }
+
+    /// Get the agent service
+    pub fn agent_service(&self) -> &Arc<AgentService> {
+        &self.agent_service
     }
 
     /// Receive next event (blocks until available)
@@ -2108,7 +2152,8 @@ impl App {
                 true
             }
             "/onboard" => {
-                self.onboarding = Some(OnboardingWizard::new());
+                let config = crate::config::Config::load().unwrap_or_default();
+                self.onboarding = Some(OnboardingWizard::from_config(&config));
                 self.mode = AppMode::Onboarding;
                 true
             }
@@ -3630,6 +3675,33 @@ impl App {
             .position(|m| m == &current)
             .unwrap_or(0);
 
+        // Determine current provider index (0=Anthropic, 1=OpenAI, 2=Gemini, 3=Qwen, 4=OpenRouter, 5=Custom)
+        let provider_name = self.agent_service.provider_name();
+        self.model_selector_provider_selected = match provider_name {
+            "anthropic" => 0,
+            "openai" => {
+                // Check if it's OpenRouter or custom by looking at base_url
+                let config = crate::config::Config::load().unwrap_or_default();
+                if let Some(base_url) = config.providers.openai.as_ref().and_then(|p| p.base_url.as_ref()) {
+                    if base_url.contains("openrouter") {
+                        4
+                    } else {
+                        5 // Custom
+                    }
+                } else {
+                    1 // Regular OpenAI
+                }
+            },
+            "gemini" => 2,
+            "qwen" => 3,
+            _ => 0,
+        };
+
+        // Reset provider view state
+        self.model_selector_showing_providers = false;
+        self.model_selector_api_key.clear();
+        self.model_selector_base_url.clear();
+
         self.mode = AppMode::ModelSelector;
     }
 
@@ -3639,37 +3711,182 @@ impl App {
         event: crossterm::event::KeyEvent,
     ) -> Result<()> {
         use super::events::keys;
+        use super::onboarding::PROVIDERS;
 
         if keys::is_cancel(&event) {
             self.switch_mode(AppMode::Chat).await?;
-        } else if keys::is_up(&event) {
-            self.model_selector_selected = self.model_selector_selected.saturating_sub(1);
-        } else if keys::is_down(&event) {
-            if !self.model_selector_models.is_empty() {
-                self.model_selector_selected = (self.model_selector_selected + 1)
-                    .min(self.model_selector_models.len() - 1);
+        } else if event.code == crossterm::event::KeyCode::Char('p') 
+            || event.code == crossterm::event::KeyCode::Tab 
+            || (event.code == crossterm::event::KeyCode::Down && event.modifiers.contains(crossterm::event::KeyModifiers::ALT)) {
+            // Toggle provider selection mode
+            self.model_selector_showing_providers = !self.model_selector_showing_providers;
+            if self.model_selector_showing_providers {
+                self.model_selector_api_key.clear();
+                self.model_selector_base_url.clear();
             }
-        } else if keys::is_enter(&event)
-            && let Some(model) = self.model_selector_models.get(self.model_selector_selected) {
-                let model_name = model.clone();
-                // Update session model
-                if let Some(session) = &mut self.current_session {
-                    session.model = Some(model_name.clone());
-                    if let Err(e) = self.session_service.update_session(session).await {
-                        tracing::warn!("Failed to update session model: {}", e);
+        } else if self.model_selector_showing_providers {
+            // Provider selection mode
+            match event.code {
+                crossterm::event::KeyCode::Up => {
+                    self.model_selector_provider_selected = self.model_selector_provider_selected.saturating_sub(1);
+                }
+                crossterm::event::KeyCode::Down => {
+                    self.model_selector_provider_selected = (self.model_selector_provider_selected + 1)
+                        .min(PROVIDERS.len() - 1);
+                }
+                crossterm::event::KeyCode::Char(c) => {
+                    // API key input for selected provider
+                    self.model_selector_api_key.push(c);
+                }
+                crossterm::event::KeyCode::Backspace => {
+                    self.model_selector_api_key.pop();
+                }
+                crossterm::event::KeyCode::Enter => {
+                    // Save provider selection
+                    self.save_provider_selection(self.model_selector_provider_selected).await?;
+                }
+                _ => {}
+            }
+        } else {
+            // Model selection mode (original behavior)
+            if keys::is_up(&event) {
+                self.model_selector_selected = self.model_selector_selected.saturating_sub(1);
+            } else if keys::is_down(&event) {
+                if !self.model_selector_models.is_empty() {
+                    self.model_selector_selected = (self.model_selector_selected + 1)
+                        .min(self.model_selector_models.len() - 1);
+                }
+            } else if keys::is_enter(&event)
+                && let Some(model) = self.model_selector_models.get(self.model_selector_selected) {
+                    let model_name = model.clone();
+                    // Update session model
+                    if let Some(session) = &mut self.current_session {
+                        session.model = Some(model_name.clone());
+                        if let Err(e) = self.session_service.update_session(session).await {
+                            tracing::warn!("Failed to update session model: {}", e);
+                        }
                     }
+                    // Persist to config.toml
+                    let provider_name = self.agent_service.provider_name().to_string();
+                    let section = format!("providers.{}", provider_name);
+                    if let Err(e) = crate::config::Config::write_key(&section, "default_model", &model_name) {
+                        tracing::warn!("Failed to persist model to config: {}", e);
+                    }
+                    // Update display name for splash screen
+                    self.default_model_name = model_name.clone();
+                    self.push_system_message(format!("Model changed to: {}", model_name));
+                    self.mode = AppMode::Chat;
                 }
-                // Persist to config.toml
-                let provider_name = self.agent_service.provider_name().to_string();
-                let section = format!("providers.{}", provider_name);
-                if let Err(e) = crate::config::Config::write_key(&section, "default_model", &model_name) {
-                    tracing::warn!("Failed to persist model to config: {}", e);
-                }
-                // Update display name for splash screen
-                self.default_model_name = model_name.clone();
-                self.push_system_message(format!("Model changed to: {}", model_name));
-                self.mode = AppMode::Chat;
+        }
+
+        Ok(())
+    }
+
+    /// Save provider selection to config and reload agent service
+    async fn save_provider_selection(&mut self, provider_idx: usize) -> Result<()> {
+        use super::onboarding::PROVIDERS;
+        use crate::config::{ProviderConfig, QwenProviderConfig, SecretString};
+
+        let provider = &PROVIDERS[provider_idx];
+        
+        // Load existing config to merge
+        let mut config = crate::config::Config::load().unwrap_or_default();
+        
+        let api_key = if self.model_selector_api_key.is_empty() {
+            None
+        } else {
+            Some(self.model_selector_api_key.clone())
+        };
+
+        // Build provider config based on selection
+        let default_model = provider.models.first().copied().unwrap_or("default");
+        match provider_idx {
+            0 => {
+                // Anthropic
+                config.providers.anthropic = Some(ProviderConfig {
+                    enabled: true,
+                    api_key: None,
+                    base_url: None,
+                    default_model: Some(default_model.to_string()),
+                });
             }
+            1 => {
+                // OpenAI
+                config.providers.openai = Some(ProviderConfig {
+                    enabled: true,
+                    api_key: None,
+                    base_url: None,
+                    default_model: Some(default_model.to_string()),
+                });
+            }
+            2 => {
+                // Gemini
+                config.providers.gemini = Some(ProviderConfig {
+                    enabled: true,
+                    api_key: None,
+                    base_url: None,
+                    default_model: Some(default_model.to_string()),
+                });
+            }
+            3 => {
+                // Qwen
+                config.providers.qwen = Some(QwenProviderConfig {
+                    enabled: true,
+                    api_key: None,
+                    base_url: None,
+                    default_model: Some(default_model.to_string()),
+                    tool_parser: None,
+                    enable_thinking: false,
+                    thinking_budget: None,
+                    region: None,
+                });
+            }
+            4 => {
+                // OpenRouter
+                config.providers.openai = Some(ProviderConfig {
+                    enabled: true,
+                    api_key: None,
+                    base_url: Some("https://openrouter.ai/api/v1/chat/completions".to_string()),
+                    default_model: Some(default_model.to_string()),
+                });
+            }
+            5 => {
+                // Custom - need base URL
+                config.providers.openai = Some(ProviderConfig {
+                    enabled: true,
+                    api_key: None,
+                    base_url: Some(self.model_selector_base_url.clone()),
+                    default_model: Some("gpt-4".to_string()),
+                });
+            }
+            _ => {}
+        }
+
+        // Save config
+        let config_path = crate::config::opencrabs_home().join("config.toml");
+        config.save(&config_path).map_err(|e| anyhow::anyhow!("Failed to save config: {}", e))?;
+
+        // Save API key to keyring if provided
+        if let Some(ref key) = api_key
+            && !provider.keyring_key.is_empty()
+        {
+            let secret = SecretString::from_str(key);
+            if let Err(e) = secret.save_to_keyring(provider.keyring_key) {
+                tracing::warn!("Failed to save API key to keyring: {}", e);
+            }
+        }
+
+        // Rebuild agent service with new provider
+        self.rebuild_agent_service().await?;
+
+        // Refresh model list
+        self.model_selector_models = self.agent_service.fetch_models().await;
+        self.model_selector_selected = 0;
+        self.model_selector_showing_providers = false;
+        self.model_selector_api_key.clear();
+
+        let provider_name = provider.name.split('(').next().unwrap_or(provider.name).trim();
+        self.push_system_message(format!("Provider changed to: {}", provider_name));
 
         Ok(())
     }

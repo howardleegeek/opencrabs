@@ -3,9 +3,9 @@
 //! Manages conversation context including messages, system brain,
 //! and token tracking.
 
-use crate::db::models::Message as DbMessage;
 use crate::brain::provider::{ContentBlock, Message, Role};
 use crate::brain::tokenizer;
+use crate::db::models::Message as DbMessage;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -157,13 +157,20 @@ impl AgentContext {
     fn is_orphaned_tool_result_msg(msg: &Message) -> bool {
         msg.role == Role::User
             && !msg.content.is_empty()
-            && msg.content.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. }))
+            && msg
+                .content
+                .iter()
+                .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
     }
 
     /// Remove any leading user messages that consist solely of ToolResult blocks.
     /// Called after trimming to prevent orphaned tool results at the start of history.
     fn drop_leading_orphan_tool_results(&mut self) {
-        while self.messages.first().map_or(false, Self::is_orphaned_tool_result_msg) {
+        while self
+            .messages
+            .first()
+            .is_some_and(Self::is_orphaned_tool_result_msg)
+        {
             let tokens = self.estimate_message_tokens(&self.messages[0]);
             self.token_count = self.token_count.saturating_sub(tokens);
             self.messages.remove(0);

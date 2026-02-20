@@ -52,6 +52,8 @@ pub enum ProgressEvent {
     CompactionSummary { summary: String },
     /// Build completed — TUI should offer restart
     RestartReady { status: String },
+//    /// A queued user message was injected into the agent context between tool iterations
+//    QueuedMessageInjected { content: String },
 }
 
 /// Callback for reporting progress during agent execution
@@ -125,6 +127,16 @@ impl AgentService {
             working_directory: Arc::new(std::sync::RwLock::new(std::env::current_dir().unwrap_or_default())),
             brain_path: None,
         }
+    }
+
+    /// Get the service context
+    pub fn context(&self) -> &ServiceContext {
+        &self.context
+    }
+
+    /// Get the tool registry
+    pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
+        &self.tool_registry
     }
 
     /// Set the default system brain
