@@ -1172,3 +1172,43 @@ level = "info"
         assert_eq!(loaded.agent.max_concurrent, 2);
     }
 }
+
+/// Resolve provider name and model from config (for display purposes)
+pub fn resolve_provider_from_config(config: &Config) -> (&str, &str) {
+    // Priority: Qwen > Anthropic > OpenAI > Gemini
+    if config.providers.qwen.as_ref().is_some_and(|p| p.enabled) {
+        let model = config.providers.qwen.as_ref()
+            .and_then(|p| p.default_model.as_deref())
+            .unwrap_or("default");
+        return ("Qwen/DashScope", model);
+    }
+    if config.providers.anthropic.as_ref().is_some_and(|p| p.enabled) {
+        let model = config.providers.anthropic.as_ref()
+            .and_then(|p| p.default_model.as_deref())
+            .unwrap_or("default");
+        return ("Anthropic", model);
+    }
+    if config.providers.openai.as_ref().is_some_and(|p| p.enabled) {
+        // Check if OpenRouter
+        if let Some(base_url) = config.providers.openai.as_ref().and_then(|p| p.base_url.as_ref()) {
+            if base_url.contains("openrouter") {
+                let model = config.providers.openai.as_ref()
+                    .and_then(|p| p.default_model.as_deref())
+                    .unwrap_or("default");
+                return ("OpenRouter", model);
+            }
+        }
+        let model = config.providers.openai.as_ref()
+            .and_then(|p| p.default_model.as_deref())
+            .unwrap_or("default");
+        return ("OpenAI", model);
+    }
+    if config.providers.gemini.as_ref().is_some_and(|p| p.enabled) {
+        let model = config.providers.gemini.as_ref()
+            .and_then(|p| p.default_model.as_deref())
+            .unwrap_or("default");
+        return ("Google Gemini", model);
+    }
+    // Default - nothing configured
+    ("Not configured", "N/A")
+}

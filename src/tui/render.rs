@@ -18,9 +18,11 @@ use unicode_width::UnicodeWidthStr;
 
 /// Render the entire UI
 pub fn render(f: &mut Frame, app: &mut App) {
-    // Show splash screen if in splash mode
+    // Show splash screen if in splash mode - read directly from config
     if app.mode == AppMode::Splash {
-        splash::render_splash(f, f.area(), app.provider_name(), app.provider_model());
+        let config = crate::config::Config::load().unwrap_or_default();
+        let (provider, model) = crate::config::resolve_provider_from_config(&config);
+        splash::render_splash(f, f.area(), provider, model);
         return;
     }
 
@@ -1838,6 +1840,7 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![
         Line::from(""),
         section("PROVIDER"),
+        kv("Provider", app.provider_name()),
         kv("Model", &app.default_model_name),
         Line::from(""),
         section("APPROVAL"),

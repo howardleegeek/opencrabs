@@ -3716,32 +3716,38 @@ impl App {
             .position(|m| m == &current)
             .unwrap_or(0);
 
-        // Determine current provider index (0=Anthropic, 1=OpenAI, 2=Gemini, 3=Qwen, 4=OpenRouter, 5=Custom)
-        let provider_name = self.agent_service.provider_name();
-        self.model_selector_provider_selected = match provider_name {
-            "anthropic" => 0,
-            "openai" => {
-                // Check if it's OpenRouter or custom by looking at base_url
-                let config = crate::config::Config::load().unwrap_or_default();
-                if let Some(base_url) = config.providers.openai.as_ref().and_then(|p| p.base_url.as_ref()) {
-                    if base_url.contains("openrouter") {
-                        4
-                    } else {
-                        5 // Custom
-                    }
+        // Determine current provider index from CONFIG (not from agent service)
+        let config = crate::config::Config::load().unwrap_or_default();
+        
+        // Check which provider is enabled in config
+        if config.providers.qwen.as_ref().is_some_and(|p| p.enabled) {
+            self.model_selector_provider_selected = 3;
+        } else if config.providers.anthropic.as_ref().is_some_and(|p| p.enabled) {
+            self.model_selector_provider_selected = 0;
+        } else if config.providers.openai.as_ref().is_some_and(|p| p.enabled) {
+            // Check if it's OpenRouter or custom
+            if let Some(base_url) = config.providers.openai.as_ref().and_then(|p| p.base_url.as_ref()) {
+                if base_url.contains("openrouter") {
+                    self.model_selector_provider_selected = 4; // OpenRouter
                 } else {
-                    1 // Regular OpenAI
+                    self.model_selector_provider_selected = 5; // Custom
                 }
-            },
-            "gemini" => 2,
-            "qwen" => 3,
-            _ => 0,
-        };
+            } else {
+                self.model_selector_provider_selected = 1; // Regular OpenAI
+            }
+        } else if config.providers.gemini.as_ref().is_some_and(|p| p.enabled) {
+            self.model_selector_provider_selected = 2;
+        } else {
+            // Default to Anthropic if nothing enabled
+            self.model_selector_provider_selected = 0;
+        }
 
         // Reset provider view state
         self.model_selector_showing_providers = false;
         self.model_selector_api_key.clear();
         self.model_selector_base_url.clear();
+        self.model_selector_filter.clear();
+        self.model_selector_focused_field = 0;
 
         self.mode = AppMode::ModelSelector;
     }
@@ -3896,6 +3902,20 @@ impl App {
         // Load existing config to merge
         let mut config = crate::config::Config::load().unwrap_or_default();
         
+        // Disable all providers first - we'll enable only the selected one
+        if let Some(ref mut p) = config.providers.anthropic {
+            p.enabled = false;
+        }
+        if let Some(ref mut p) = config.providers.openai {
+            p.enabled = false;
+        }
+        if let Some(ref mut p) = config.providers.gemini {
+            p.enabled = false;
+        }
+        if let Some(ref mut p) = config.providers.qwen {
+            p.enabled = false;
+        }
+        
         let api_key = if self.model_selector_api_key.is_empty() {
             None
         } else {
@@ -3991,11 +4011,15 @@ impl App {
             return Err(e);
         }
 
-        // Get the selected model - use fetched models if available, otherwise fallback
+        // Get the selected model - use filtered display list to get actual model name
         let selected_model = if !self.model_selector_models.is_empty() {
-            // Use fetched models
-            if let Some(model) = self.model_selector_models.get(self.model_selector_selected) {
-                model.clone()
+            // Get model from fetched list using filtered index
+            let filter = self.model_selector_filter.to_lowercase();
+            let filtered: Vec<_> = self.model_selector_models.iter()
+                .filter(|m| m.to_lowercase().contains(&filter))
+                .collect();
+            if let Some(model) = filtered.get(self.model_selector_selected) {
+                model.to_string()
             } else {
                 self.model_selector_models.first().cloned().unwrap_or_else(|| "gpt-4o-mini".to_string())
             }
