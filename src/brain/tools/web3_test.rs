@@ -15,7 +15,7 @@ use tokio::time::{timeout, Duration};
 pub struct Web3TestTool;
 
 /// Default path to shell-run binary
-const DEFAULT_SHELL_RUN: &str = "shell-run";
+const DEFAULT_SHELL_RUN: &str = "/Users/howardli/.local/bin/shell-run";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Web3TestInput {
