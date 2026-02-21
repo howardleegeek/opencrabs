@@ -106,6 +106,12 @@ pub(crate) async fn cmd_chat(
         tracing::info!("Registered Brave search tool");
     }
 
+    // Web3 tools
+    tool_registry.register(Arc::new(crate::brain::tools::Web3TestTool));
+    tool_registry.register(Arc::new(crate::brain::tools::Web3ReportReadTool));
+    tool_registry.register(Arc::new(crate::brain::tools::Web3DeployTool));
+    tracing::info!("Registered Web3 tools (test, report_read, deploy)");
+
     // Index existing memory files and warm up embedding engine in the background
     tokio::spawn(async {
         match crate::memory::get_store() {

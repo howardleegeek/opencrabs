@@ -285,6 +285,11 @@ pub(crate) async fn cmd_run(
         tool_registry.register(Arc::new(BraveSearchTool::new(brave_key)));
     }
 
+    // Web3 tools
+    tool_registry.register(Arc::new(crate::brain::tools::Web3TestTool));
+    tool_registry.register(Arc::new(crate::brain::tools::Web3ReportReadTool));
+    tool_registry.register(Arc::new(crate::brain::tools::Web3DeployTool));
+
     // Build dynamic system brain from workspace files
     let brain_path = BrainLoader::resolve_path();
     let brain_loader = BrainLoader::new(brain_path.clone());

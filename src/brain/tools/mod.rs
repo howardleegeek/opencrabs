@@ -53,6 +53,16 @@ pub mod slack_connect;
 #[cfg(feature = "slack")]
 pub mod slack_send;
 
+// Tool implementations - Phase 5: Web3 Tools
+pub mod web3_test;
+pub mod web3_report_read;
+pub mod web3_deploy;
+
+// Re-export Web3 tools for easy registration
+pub use web3_test::Web3TestTool;
+pub use web3_report_read::Web3ReportReadTool;
+pub use web3_deploy::Web3DeployTool;
+
 // Re-exports
 pub use error::{Result, ToolError};
 pub use r#trait::{Tool, ToolCapability, ToolExecutionContext, ToolResult};
