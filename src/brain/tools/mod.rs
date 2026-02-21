@@ -57,11 +57,13 @@ pub mod slack_send;
 pub mod web3_test;
 pub mod web3_report_read;
 pub mod web3_deploy;
+pub mod web3_auto_repair;
 
 // Re-export Web3 tools for easy registration
 pub use web3_test::Web3TestTool;
 pub use web3_report_read::Web3ReportReadTool;
 pub use web3_deploy::Web3DeployTool;
+pub use web3_auto_repair::Web3AutoRepairTool;
 
 // Re-exports
 pub use error::{Result, ToolError};

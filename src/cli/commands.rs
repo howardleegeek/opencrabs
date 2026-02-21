@@ -289,6 +289,7 @@ pub(crate) async fn cmd_run(
     tool_registry.register(Arc::new(crate::brain::tools::Web3TestTool));
     tool_registry.register(Arc::new(crate::brain::tools::Web3ReportReadTool));
     tool_registry.register(Arc::new(crate::brain::tools::Web3DeployTool));
+    tool_registry.register(Arc::new(crate::brain::tools::Web3AutoRepairTool));
 
     // Build dynamic system brain from workspace files
     let brain_path = BrainLoader::resolve_path();
